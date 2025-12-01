@@ -1,0 +1,13 @@
+gate0:
+  enabled: true
+  min_len: 10
+  max_recency_minutes: 1440
+  engagement_min:
+    likes: 0
+    comments: 0
+prompt_id: triage.zh-Hant@v1
+gate0b:
+  enabled: true
+  min_len: 20
+  min_likes: 100
+  min_comments: 30

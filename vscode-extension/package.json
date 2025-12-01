@@ -1,0 +1,186 @@
+{
+  "name": "agent-alike-po-bot",
+  "displayName": "Agent-alike PO Bot",
+  "description": "VS Code extension for automated ticket processing with built-in chat models",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Agent-alike PO Bot",
+      "properties": {
+        "agent-alike-po-bot.orchestrator.baseUrl": {
+          "type": "string",
+          "default": "http://localhost:3000",
+          "description": "Orchestrator 服務的基礎 URL"
+        },
+        "agent-alike-po-bot.orchestrator.authToken": {
+          "type": "string",
+          "default": "",
+          "description": "若後端開啟驗證，填入與 TRIAGE_BEARER_TOKEN 相同的字串（不要加 Bearer 前綴）"
+        },
+        "agent-alike-po-bot.worker.pollIntervalMs": {
+          "type": "number",
+          "default": 5000,
+          "minimum": 500,
+          "description": "票據輪詢間隔（毫秒）"
+        },
+        "agent-alike-po-bot.worker.concurrency": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "description": "同時處理票據的數量（工作槽位）"
+        },
+        "agent-alike-po-bot.worker.batchSize": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "description": "每次 lease 向後端索取的最大票數（與 concurrency 共同決定實際處理量）"
+        },
+        "agent-alike-po-bot.worker.useV1Lease": {
+          "type": "boolean",
+          "default": true,
+          "description": "優先使用 /v1/tickets/lease，關閉時以舊版端點回退"
+        },
+        "agent-alike-po-bot.worker.kinds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "TRIAGE",
+              "REPLY"
+            ]
+          },
+          "default": [
+            "TRIAGE"
+          ],
+          "description": "此 worker 要處理的票據種類。可同時包含 TRIAGE 與 REPLY。"
+        },
+        "agent-alike-po-bot.worker.kindStrategy": {
+          "type": "string",
+          "enum": [
+            "triage_first",
+            "reply_first",
+            "round_robin",
+            "weighted"
+          ],
+          "default": "triage_first",
+          "description": "多種票據同時存在時，如何決定下一張要 lease 的種類。"
+        },
+        "agent-alike-po-bot.worker.kindWeights": {
+          "type": "object",
+          "default": {
+            "TRIAGE": 7,
+            "REPLY": 3
+          },
+          "description": "當 strategy=weighted 時使用的權重。"
+        },
+        "agent-alike-po-bot.reply.maxChars": {
+          "type": "number",
+          "default": 320,
+          "description": "回覆文字最大長度（字元）。"
+        },
+        "agent-alike-po-bot.send.dryRun": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否為乾跑模式（不實際發送訊息）"
+        },
+        "agent-alike-po-bot.model.preferred": {
+          "type": "string",
+          "default": "gpt-5-mini",
+          "description": "偏好的聊天模型"
+        },
+        "agent-alike-po-bot.logs.level": {
+          "type": "string",
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "default": "info",
+          "description": "日誌級別"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "agent-po-bot.refresh",
+        "title": "重新整理票據",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "agent-po-bot.approveTicket",
+        "title": "核准票據",
+        "icon": "$(check)"
+      },
+      {
+        "command": "agent-po-bot.rejectTicket",
+        "title": "拒絕票據",
+        "icon": "$(close)"
+      },
+      {
+        "command": "agent-po-bot.viewTicket",
+        "title": "檢視票據詳情",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "agent-po-bot.selfTest",
+        "title": "PO Bot: Self-test",
+        "icon": "$(beaker)"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "agent-po-bot.tickets",
+          "name": "PO Bot 票據",
+          "when": "true",
+          "icon": "$(list-unordered)"
+        }
+      ]
+    },
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "agent-po-bot.approveTicket",
+          "when": "view == agent-po-bot.tickets && viewItem == ticket-drafted",
+          "group": "inline"
+        },
+        {
+          "command": "agent-po-bot.rejectTicket",
+          "when": "view == agent-po-bot.tickets && viewItem == ticket-drafted",
+          "group": "inline"
+        },
+        {
+          "command": "agent-po-bot.viewTicket",
+          "when": "view == agent-po-bot.tickets",
+          "group": "inline"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "16.x",
+    "@types/node-fetch": "^2.6.13",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.1.6"
+  },
+  "dependencies": {
+    "node-fetch": "^2.6.12",
+    "yaml": "^2.8.1"
+  }
+}

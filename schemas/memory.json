@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Memory Schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique memory identifier"
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["semantic", "episodic", "factual", "conversation"],
+      "description": "Type of memory"
+    },
+    "content": {
+      "type": "string",
+      "description": "Memory content"
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "thread_id": {
+          "type": "string",
+          "description": "Associated thread"
+        },
+        "actor": {
+          "type": "string",
+          "description": "Actor involved"
+        },
+        "topic": {
+          "type": "string",
+          "description": "Topic or subject"
+        },
+        "citations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Source citations"
+        }
+      }
+    },
+    "embedding": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "description": "Vector embedding for semantic search"
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "accessed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "relevance_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Relevance score for search results"
+        },
+        "expiry": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When this memory expires"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tags for categorization"
+        }
+      }
+    }
+  },
+  "required": ["id", "kind", "content", "metadata"]
+}

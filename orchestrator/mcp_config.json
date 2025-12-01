@@ -1,0 +1,101 @@
+{
+  "mcp_servers": {
+    "threads": {
+      "endpoint": "http://localhost:3001/mcp",
+      "description": "Threads provider for fetching thread content and posting replies",
+      "tools": [
+        "threads.fetch_thread",
+        "threads.list_notifications", 
+        "threads.post_reply",
+        "threads.get_thread_history"
+      ],
+      "rate_limits": {
+        "requests_per_minute": 60,
+        "burst": 10
+      },
+      "timeout": 30
+    },
+    "mem": {
+      "endpoint": "http://localhost:3002/mcp",
+      "description": "Memory service for semantic search and storage",
+      "tools": [
+        "mem.search",
+        "mem.write",
+        "mem.get",
+        "mem.delete"
+      ],
+      "rate_limits": {
+        "requests_per_minute": 100,
+        "burst": 20
+      },
+      "timeout": 10
+    },
+    "guard": {
+      "endpoint": "http://localhost:3003/mcp", 
+      "description": "Guardrails service for content safety and policy checking",
+      "tools": [
+        "guard.check_content",
+        "guard.check_policy",
+        "guard.classify_risk"
+      ],
+      "rate_limits": {
+        "requests_per_minute": 200,
+        "burst": 50
+      },
+      "timeout": 5
+    },
+    "reply": {
+      "endpoint": "http://localhost:3004/mcp",
+      "description": "Reply service for posting responses",
+      "tools": [
+        "reply.send",
+        "reply.schedule",
+        "reply.cancel"
+      ],
+      "rate_limits": {
+        "requests_per_minute": 30,
+        "burst": 5
+      },
+      "timeout": 15
+    },
+    "notebooklm": {
+      "endpoint": "http://localhost:3005/mcp",
+      "description": "NotebookLM MCP for RAG and knowledge retrieval",
+      "tools": [
+        "nb.navigate",
+        "nb.chat_with_notebook",
+        "nb.search_notebooks"
+      ],
+      "rate_limits": {
+        "requests_per_minute": 20,
+        "burst": 3
+      },
+      "timeout": 60,
+      "optional": true
+    }
+  },
+  "tool_whitelist": [
+    "threads.fetch_thread",
+    "threads.list_notifications",
+    "threads.post_reply", 
+    "threads.get_thread_history",
+    "mem.search",
+    "mem.write",
+    "mem.get",
+    "mem.delete",
+    "guard.check_content",
+    "guard.check_policy",
+    "guard.classify_risk",
+    "reply.send",
+    "reply.schedule",
+    "reply.cancel",
+    "nb.navigate",
+    "nb.chat_with_notebook",
+    "nb.search_notebooks"
+  ],
+  "fallback_behavior": {
+    "on_tool_unavailable": "skip_node",
+    "on_server_timeout": "retry_once",
+    "on_rate_limit": "queue_request"
+  }
+}

@@ -1,0 +1,110 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Ticket Schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique ticket identifier"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["DraftTicket", "FlowSelectionTicket", "ApprovalTicket"],
+      "description": "Type of ticket"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "in_progress", "completed", "failed", "approved", "rejected"],
+      "description": "Current status of the ticket"
+    },
+    "flow_id": {
+      "type": "string",
+      "description": "Associated flow identifier"
+    },
+    "event": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Event type (e.g., thread_reply, mention)"
+        },
+        "thread_id": {
+          "type": "string",
+          "description": "Thread identifier"
+        },
+        "content": {
+          "type": "string",
+          "description": "Event content"
+        },
+        "actor": {
+          "type": "string",
+          "description": "Actor who triggered the event"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Event timestamp"
+        }
+      },
+      "required": ["type", "thread_id", "content", "actor", "timestamp"]
+    },
+    "draft": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "Generated draft content"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confidence score for the draft"
+        },
+        "citations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Source citations if applicable"
+        },
+        "model_info": {
+          "type": "object",
+          "properties": {
+            "host": { "type": "string" },
+            "provider": { "type": "string" },
+            "model": { "type": "string" },
+            "latency_ms": { "type": "number" },
+            "prompt_tokens": { "type": "number" },
+            "completion_tokens": { "type": "number" }
+          },
+          "additionalProperties": true,
+          "description": "Model evidence for the draft"
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lease_expires": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the ticket lease expires"
+        },
+        "assigned_to": {
+          "type": "string",
+          "description": "Worker assigned to this ticket"
+        }
+      }
+    }
+  },
+  "required": ["id", "type", "status", "event", "metadata"]
+}

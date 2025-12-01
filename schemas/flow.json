@@ -1,0 +1,127 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Flow Specification Schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique flow identifier"
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable flow name"
+    },
+    "version": {
+      "type": "string",
+      "description": "Flow version"
+    },
+    "description": {
+      "type": "string",
+      "description": "Flow description"
+    },
+    "trigger_conditions": {
+      "type": "object",
+      "properties": {
+        "event_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Event types that trigger this flow"
+        },
+        "filters": {
+          "type": "object",
+          "description": "Additional filters for flow triggering"
+        }
+      }
+    },
+    "dag": {
+      "type": "object",
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Node identifier"
+              },
+              "tool": {
+                "type": "string",
+                "description": "Tool to execute (e.g., thread.fetch, mem.search)"
+              },
+              "inputs": {
+                "type": "object",
+                "description": "Input parameters for the tool"
+              },
+              "conditions": {
+                "type": "object",
+                "description": "Conditions for node execution"
+              }
+            },
+            "required": ["id", "tool"]
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "description": "Source node ID"
+              },
+              "to": {
+                "type": "string",
+                "description": "Target node ID"
+              },
+              "condition": {
+                "type": "string",
+                "description": "Condition for edge traversal"
+              }
+            },
+            "required": ["from", "to"]
+          }
+        }
+      },
+      "required": ["nodes", "edges"]
+    },
+    "guardrails": {
+      "type": "object",
+      "properties": {
+        "auto_send_threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confidence threshold for automatic sending"
+        },
+        "sensitive_topics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Topics that require manual approval"
+        },
+        "rate_limits": {
+          "type": "object",
+          "properties": {
+            "per_thread": {
+              "type": "integer",
+              "description": "Max actions per thread per hour"
+            },
+            "per_actor": {
+              "type": "integer",
+              "description": "Max actions per actor per hour"
+            },
+            "global_daily": {
+              "type": "integer",
+              "description": "Global daily limit"
+            }
+          }
+        }
+      }
+    }
+  },
+  "required": ["id", "name", "version", "dag"]
+}

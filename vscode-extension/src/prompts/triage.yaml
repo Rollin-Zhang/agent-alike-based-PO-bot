@@ -1,0 +1,48 @@
+prompt_id: triage.zh-Hant@v1
+description: >
+  政治議題可回覆性評估。根據是否明確論點、可辯性與關聯度等信號，決定是否批准回覆。
+version: 1
+constraints:
+  language: zh-Hant
+sections:
+  system: |
+    你是一位審核員，評估社群貼文是否值得投入回覆資源。
+assistant_style: |
+  僅輸出 JSON，不要解釋。
+user_template: |
+  候選片段（繁中）：
+  """
+  {{candidate_snippet}}
+  """
+
+  請依下列 schema 只輸出 JSON：
+  {
+    "decision": "APPROVE" | "SKIP" | "FLAG",
+    "confidence": number (0~1),
+    "reasons": string[],
+    "summary": "一句中文摘要重點",
+    "signals": { "len": number, "likes": number, "comments": number }
+  }
+outputs:
+  schema:
+    type: object
+    properties:
+      decision:
+        type: string
+        enum: [APPROVE, SKIP, FLAG]
+      confidence:
+        type: number
+        minimum: 0
+        maximum: 1
+      reasons:
+        type: array
+        items: { type: string }
+      summary: { type: string }
+      signals:
+        type: object
+        properties:
+          len: { type: number }
+          likes: { type: number }
+          comments: { type: number }
+        required: [len, likes, comments]
+    required: [decision, confidence, reasons, summary, signals]
