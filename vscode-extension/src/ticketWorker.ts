@@ -4,7 +4,7 @@ import { Config } from './config';
 import { ApiClient } from './apiClient';
 import { ChatInvoker } from './chatInvoker';
 import { PromptBuilder, UnsupportedTicketKindError } from './promptBuilder';
-import { Ticket, ProcessingError, WorkerStatus, FillRequest } from './types';
+import { Ticket, ProcessingError, WorkerStatus } from './types';
 
 type Kind = 'TRIAGE' | 'REPLY';
 
@@ -12,7 +12,7 @@ export class TicketWorker implements vscode.Disposable {
   private logger: Logger;
   private apiClient: ApiClient;
   private chatInvoker: ChatInvoker;
-  private panelProvider: any; // TicketPanel, avoid circular dep
+  private panelProvider: any;
 
   private isRunning = false;
   private watchdogTimer: NodeJS.Timeout | undefined;
@@ -29,10 +29,10 @@ export class TicketWorker implements vscode.Disposable {
   private replyMaxChars = 320;
 
   // State
-  private rrIndex = 0;
   private activeTickets: Set<string> = new Set();
   private errors: ProcessingError[] = [];
   private lastPollTime?: Date;
+  private rrIndex = 0; // for round_robin
 
   private configDisposable: vscode.Disposable;
 
@@ -51,7 +51,7 @@ export class TicketWorker implements vscode.Disposable {
     const cfg = Config.get();
     this.baseWatchdogInterval = cfg.worker.pollIntervalMs;
     this.maxConcurrency = cfg.worker.concurrency;
-    // @ts-ignore contributed in package.json
+    // @ts-ignore
     this.batchSize = Math.max(1, Number(cfg.worker.batchSize || 3));
     this.useV1Lease = cfg.worker.useV1Lease;
 
@@ -66,44 +66,12 @@ export class TicketWorker implements vscode.Disposable {
     };
     this.replyMaxChars = Math.max(80, Number(cfg.reply.maxChars || 320));
     this.rrIndex = 0;
-
-    this.logger.debug('Worker configuration updated', {
-      watchdogIntervalMs: this.baseWatchdogInterval,
-      concurrency: this.maxConcurrency,
-      batchSize: this.batchSize,
-      useV1Lease: this.useV1Lease,
-      kinds: this.kinds,
-      kindStrategy: this.kindStrategy,
-      kindWeights: this.kindWeights,
-      replyMaxChars: this.replyMaxChars,
-    });
   }
 
   start(): void {
-    if (this.isRunning) {
-      this.logger.warn('Worker is already running');
-      return;
-    }
+    if (this.isRunning) return;
     this.isRunning = true;
-
-    const hostInfo = {
-      hostName: vscode.env.appName,
-      hostVersion: vscode.version,
-      language: vscode.env.language,
-      sessionId: vscode.env.sessionId,
-      timestamp: new Date().toISOString(),
-    };
-    const cfg = Config.get();
-    this.logger.info('PO Bot Extension starting (event-driven)', {
-      ...hostInfo,
-      orchestratorBaseUrl: cfg.orchestrator.baseUrl,
-      watchdogInterval: this.baseWatchdogInterval,
-      concurrency: this.maxConcurrency,
-      batchSize: this.batchSize,
-      kinds: this.kinds,
-      kindStrategy: this.kindStrategy,
-    });
-
+    this.logger.info('TicketWorker started');
     void this.tryRefillImmediately('startup');
     this.startWatchdog();
   }
@@ -111,11 +79,8 @@ export class TicketWorker implements vscode.Disposable {
   stop(): void {
     if (!this.isRunning) return;
     this.isRunning = false;
-    if (this.watchdogTimer) {
-      clearInterval(this.watchdogTimer);
-      this.watchdogTimer = undefined;
-    }
-    this.logger.info('Stopped ticket worker');
+    if (this.watchdogTimer) clearInterval(this.watchdogTimer);
+    this.logger.info('TicketWorker stopped');
   }
 
   private startWatchdog(): void {
@@ -125,40 +90,31 @@ export class TicketWorker implements vscode.Disposable {
       if (!this.isRunning) return;
       void this.tryRefillImmediately('watchdog');
     }, interval);
-    this.logger.debug('Watchdog started', { intervalMs: interval });
   }
 
-  /* ────────────────────────────── Refill / Lease ───────────────────────────── */
+  /* ────────────────────────────── Lease Logic ───────────────────────────── */
 
-  private async tryRefillImmediately(trigger: 'startup' | 'onFinish' | 'watchdog' = 'onFinish'): Promise<void> {
+  private async tryRefillImmediately(trigger: string): Promise<void> {
     if (!this.isRunning) return;
-
+    
+    // 並發控制
     const slots = this.maxConcurrency - this.activeTickets.size;
-    if (slots <= 0 || this.isRefilling) {
-      this.logger.debug(slots <= 0 ? 'No available slots; skip refill' : 'Refill already in-flight', {
-        active: this.activeTickets.size, max: this.maxConcurrency, trigger
-      });
-      return;
-    }
+    if (slots <= 0 || this.isRefilling) return;
 
     this.isRefilling = true;
     this.lastPollTime = new Date();
 
     try {
-      const leased = await this.leaseBatch(Math.min(slots, this.batchSize));
-      if (leased.length === 0) {
-        this.logger.debug('No tickets leased', { trigger });
-        return;
-      }
-      this.logger.info('🎫 Leasing success', { trigger, leased: leased.length });
-
-      for (const t of leased) {
-        void this.processTicket(t).catch(err => {
-          this.logger.error(`Failed to process ticket ${(t as any).ticket_id || t.id}`, err);
-          const classified = this.classifyError(err);
-          classified.ticketId = (t as any).ticket_id || t.id;
-          this.recordError(classified);
-        });
+      const batch = Math.min(slots, this.batchSize);
+      const leased = await this.leaseBatch(batch);
+      
+      if (leased.length > 0) {
+        this.logger.info(`Leased ${leased.length} tickets`, { trigger });
+        for (const t of leased) {
+          void this.processTicket(t).catch(err => {
+            this.logger.error(`Unhandled process error ticket=${t.id}`, err);
+          });
+        }
       }
     } finally {
       this.isRefilling = false;
@@ -171,47 +127,29 @@ export class TicketWorker implements vscode.Disposable {
     for (let i = 0; i < n; i++) {
       const kind = this.decideNextKind();
       const t = await this.leaseOne(kind);
-      if (t) {
-        out.push(t);
-        this.logger.info('Leased ticket slot', { kind, ticketId: (t as any).ticket_id });
-      }
+      if (t) out.push(t);
     }
     return out;
   }
 
   private decideNextKind(): Kind {
-    const active = (this.kinds.length ? this.kinds : ['TRIAGE']) as Kind[];
+    const active = this.kinds;
+    if (!active.length) return 'TRIAGE';
     if (active.length === 1) return active[0];
-
-    const strategies: Record<typeof this.kindStrategy, () => Kind> = {
-      reply_first: () => (active.includes('REPLY') ? 'REPLY' : 'TRIAGE'),
-      triage_first: () => (active.includes('TRIAGE') ? 'TRIAGE' : 'REPLY'),
-      round_robin: () => {
-        const k = active[this.rrIndex % active.length];
-        this.rrIndex = (this.rrIndex + 1) % active.length;
-        return k;
-      },
-      weighted: () => {
-        const ws = active.map(k => Math.max(0, this.kindWeights[k] || 0));
-        const total = ws.reduce((a, b) => a + b, 0);
-        if (total <= 0) return active.includes('TRIAGE') ? 'TRIAGE' : 'REPLY';
-        let roll = Math.random() * total;
-        for (let i = 0; i < active.length; i++) {
-          if (roll < ws[i]) return active[i];
-          roll -= ws[i];
-        }
-        return active[0];
-      }
-    };
-
-    return strategies[this.kindStrategy]();
+    
+    // round_robin fallback
+    const k = active[this.rrIndex % active.length];
+    this.rrIndex = (this.rrIndex + 1) % active.length;
+    return k;
   }
 
   private async leaseOne(kind: Kind): Promise<Ticket | undefined> {
     try {
+      // llm.generate 是目前唯一的 capability 要求
+      const caps = ['llm.generate'];
       const acquired = this.useV1Lease
-        ? await this.apiClient.leaseTicketsV1(kind, 1, 90, ['llm.generate'])
-        : await this.apiClient.leaseTickets({ limit: 1, lease_sec: 90, capabilities: ['llm.generate'], kind });
+        ? await this.apiClient.leaseTicketsV1(kind, 1, 90, caps)
+        : await this.apiClient.leaseTickets({ limit: 1, lease_sec: 90, capabilities: caps, kind });
 
       if (acquired && acquired.length > 0) {
         const t = acquired[0];
@@ -219,32 +157,18 @@ export class TicketWorker implements vscode.Disposable {
         (t.metadata as any).kind = kind;
         return t;
       }
-    } catch (e) {
-      this.logger.debug(`Lease error (${kind})`, e);
-    }
+    } catch (e) { /* ignore lease errors (queue empty etc) */ }
     return undefined;
   }
 
-  /* ────────────────────────────── Processing (文本路線) ───────────────────────────── */
+  /* ────────────────────────────── Processing ───────────────────────────── */
 
   private async processTicket(ticket: Ticket): Promise<void> {
     const ticketId = (ticket as any).ticket_id || ticket.id;
-    if (this.activeTickets.has(ticketId)) {
-      this.logger.warn(`Ticket ${ticketId} is already being processed`);
-      return;
-    }
+    if (this.activeTickets.has(ticketId)) return;
     this.activeTickets.add(ticketId);
-    const startTime = Date.now();
 
-    this.logger.info('Ticket state transition', {
-      ticketId,
-      fromStatus: ticket.status,
-      toStatus: 'processing',
-      transition: 'pending → processing',
-      flowId: ticket.flow_id,
-      eventType: ticket.event.type,
-      timestamp: new Date().toISOString(),
-    });
+    this.logger.info(`Processing ticket ${ticketId}`, { flow: ticket.flow_id });
 
     try {
       const proc = new TicketProcessor({
@@ -259,128 +183,44 @@ export class TicketWorker implements vscode.Disposable {
 
       if (result.status === 'failed') {
         if (result.retryable) {
-          try {
-            await this.apiClient.nackTicket(ticketId);
-            this.logger.info('Ticket released for retry', { ticketId, reason: result.reason });
-          } catch (e) {
-            this.logger.debug(`Failed to nack ticket ${ticketId}`, e);
-          }
-        } else {
-          await this.markFailed(ticketId, result.reason || 'NON_RETRYABLE_ERROR');
-        }
-        return;
-      }
-
-      const processingTime = Date.now() - startTime;
-      this.logger.info('Ticket state transition', {
-        ticketId,
-        fromStatus: 'processing',
-        toStatus: 'drafted',
-        transition: 'processing → drafted',
-        processingTimeMs: processingTime,
-        timestamp: new Date().toISOString(),
-      });
-
-    } catch (error) {
-      const processingError = this.classifyError(error);
-      processingError.ticketId = ticketId;
-
-      this.logger.error('Ticket state transition', {
-        ticketId,
-        fromStatus: 'processing',
-        toStatus: 'failed',
-        transition: 'processing → failed',
-        errorType: processingError.type,
-        errorCode: this.getErrorCode(processingError),
-        retryable: processingError.retryable,
-        error: processingError.message,
-        timestamp: new Date().toISOString()
-      });
-
-      if (processingError.type === 'conflict') {
-        this.logger.info(`Ticket ${ticketId} processed by another worker`);
-      } else if (processingError.retryable) {
-        try {
           await this.apiClient.nackTicket(ticketId);
-          this.logger.info('Ticket released for retry', { ticketId, errorType: processingError.type });
-        } catch (nackError) {
-          this.logger.debug(`Failed to nack ticket ${ticketId}`, nackError);
+          this.logger.info(`Nacked ticket ${ticketId}`, { reason: result.reason });
+        } else {
+          await this.markFailed(ticketId, result.reason || 'UNKNOWN_ERROR');
         }
       } else {
-        await this.markFailed(ticketId, 'NON_RETRYABLE_ERROR', processingError.message);
+        this.logger.info(`Ticket ${ticketId} completed`);
       }
 
-      this.recordError(processingError);
-      throw processingError;
-
+    } catch (error: any) {
+      const msg = error?.message || String(error);
+      this.logger.error(`Process crash ${ticketId}`, error);
+      // 未預期的崩潰視為可重試（可能是網路或暫時性問題）
+      await this.apiClient.nackTicket(ticketId); 
+      this.recordError({ type: 'unknown', message: msg, retryable: true, ticketId });
     } finally {
       this.activeTickets.delete(ticketId);
-      this.onTicketFinished();
+      this.updatePanel();
+      // 處理完一張，立即嘗試補貨，維持滿載
+      void this.tryRefillImmediately('onFinish');
     }
   }
 
-  private onTicketFinished(): void {
-    this.updatePanel();
-    void this.tryRefillImmediately('onFinish');
-  }
-
-  /* ────────────────────────────── Error & misc ───────────────────────────── */
-
-  private getErrorCode(error: ProcessingError): string {
-    switch (error.type) {
-      case 'network':    return 'ERR_NETWORK_TIMEOUT';
-      case 'rate_limit': return 'ERR_RATE_LIMIT';
-      case 'conflict':   return 'ERR_CONFLICT';
-      case 'validation': return 'ERR_VALIDATION';
-      case 'timeout':    return 'ERR_MODEL_TIMEOUT';
-      default:           return 'ERR_UNKNOWN';
-    }
-  }
-
-  private classifyError(error: any): ProcessingError {
-    if (error && typeof error === 'object' && 'type' in error) return error as ProcessingError;
-    if (error instanceof UnsupportedTicketKindError || (error && error.code === 'UNSUPPORTED_TICKET_KIND')) {
-      return { type: 'validation', message: 'Unsupported ticket kind', retryable: false };
-    }
-    if (error instanceof Error) {
-      const msg = (error.message || '').toLowerCase();
-      if (msg.includes('conflict') || msg.includes('409'))  return { type: 'conflict', message: 'Version conflict', retryable: false };
-      if (msg.includes('timeout'))                           return { type: 'timeout', message: 'Request timeout', retryable: true };
-      if (msg.includes('rate limit') || msg.includes('429')) return { type: 'rate_limit', message: 'Rate limit exceeded', retryable: true };
-      if (msg.includes('validation'))                        return { type: 'validation', message: error.message, retryable: false };
-      return { type: 'unknown', message: error.message, retryable: true };
-    }
-    return { type: 'unknown', message: 'Unknown error', retryable: true };
-  }
-
-  private recordError(error: ProcessingError): void {
-    this.errors.push({ ...error, timestamp: new Date() } as any);
-    if (this.errors.length > 50) this.errors = this.errors.slice(-50);
-  }
-
-  private async markFailed(ticketId: string, reason: string, detail?: any): Promise<void> {
-    const anyClient = this.apiClient as any;
+  private async markFailed(ticketId: string, reason: string): Promise<void> {
     try {
-      if (typeof anyClient.markTicketFailed === 'function') {
-        await anyClient.markTicketFailed(ticketId, { reason, detail });
-        this.logger.info('Ticket marked as failed via ApiClient.markTicketFailed', { ticketId, reason });
-        return;
-      }
-      if (typeof anyClient.post === 'function') {
-        await anyClient.post(`/tickets/${ticketId}/fail`, { reason, detail });
-        this.logger.info('Ticket marked as failed via ApiClient.post(/fail)', { ticketId, reason });
-        return;
-      }
-      this.logger.warn('No fail endpoint available in ApiClient; please implement markTicketFailed()', { ticketId, reason });
+        await (this.apiClient as any).post(`/tickets/${ticketId}/fail`, { reason });
     } catch (e) {
-      this.logger.error('Failed to mark ticket as failed', { ticketId, reason, error: (e as Error)?.message });
+        this.logger.warn(`Failed to mark ticket ${ticketId} as failed`, e);
     }
   }
 
   private updatePanel(): void {
-    if (this.panelProvider && typeof this.panelProvider.refresh === 'function') {
-      this.panelProvider.refresh();
-    }
+    if (this.panelProvider?.refresh) this.panelProvider.refresh();
+  }
+
+  private recordError(err: ProcessingError): void {
+    this.errors.push({ ...err, timestamp: new Date() } as any);
+    if (this.errors.length > 50) this.errors.shift();
   }
 
   getStatus(): WorkerStatus {
@@ -394,15 +234,12 @@ export class TicketWorker implements vscode.Disposable {
   }
 
   async triggerPoll(): Promise<void> {
-    if (!this.isRunning) throw new Error('Worker is not running');
-    this.logger.info('Manual refill triggered');
-    await this.tryRefillImmediately('watchdog');
+    await this.tryRefillImmediately('manual');
   }
 
   dispose(): void {
     this.stop();
     this.configDisposable.dispose();
-    this.logger.info('Ticket worker disposed');
   }
 }
 
@@ -416,8 +253,8 @@ type ProcessorDeps = {
   replyMaxChars: number;
 };
 
-type RunResult =
-  | { status: 'drafted' }
+type RunResult = 
+  | { status: 'drafted' } 
   | { status: 'failed'; retryable: boolean; reason?: string };
 
 class TicketProcessor {
@@ -426,6 +263,7 @@ class TicketProcessor {
   private chat: ChatInvoker;
   private logger: Logger;
   private replyMaxChars: number;
+  private maxRetries = 2; // 自我修正最大嘗試次數
 
   constructor({ ticket, apiClient, chatInvoker, logger, replyMaxChars }: ProcessorDeps) {
     this.t = ticket;
@@ -437,163 +275,279 @@ class TicketProcessor {
 
   async run(): Promise<RunResult> {
     const kind = this.resolveKind(this.t);
-    if (kind === 'UNKNOWN') return { status: 'failed', retryable: false, reason: 'UNSUPPORTED_TICKET_KIND' };
-
-    let prompt: string;
-    try {
-      prompt = PromptBuilder.buildPrompt(this.t);
-    } catch (e: any) {
-      if (e instanceof UnsupportedTicketKindError || e?.code === 'UNSUPPORTED_TICKET_KIND') {
-        return { status: 'failed', retryable: false, reason: 'UNSUPPORTED_TICKET_KIND' };
-      }
-      throw e;
+    if (kind === 'UNKNOWN') {
+      return { status: 'failed', retryable: false, reason: 'UNSUPPORTED_TICKET_KIND' };
     }
 
-    const maxChars = this.getMaxChars(this.t, kind);
-    const modelResp = await this.chat.invokeChatModel(prompt, {
-      maxTokens: maxChars * 2,
-      temperature: 0.7,
-      timeout: 30000,
+    if (kind === 'TRIAGE') return this.runTriage();
+    if (kind === 'REPLY') return this.runReply();
+
+    return { status: 'failed', retryable: false, reason: 'LOGIC_ERROR' };
+  }
+
+  private resolveKind(t: Ticket): Kind | 'UNKNOWN' {
+    const configured = (t.metadata && (t.metadata as any).kind) as Kind | undefined;
+    if (configured) return configured;
+    
+    // Fallback: 根據 flow_id 或 event type 判斷
+    const fid = t.flow_id || '';
+    const eid = t.event?.type || '';
+    if (fid.includes('reply') || eid.includes('reply')) return 'REPLY';
+    if (fid.includes('triage') || eid.includes('triage')) return 'TRIAGE';
+    
+    return 'UNKNOWN';
+  }
+
+  /* === TRIAGE FLOW: YAML Schema Driven === */
+  private async runTriage(): Promise<RunResult> {
+    const prompt = PromptBuilder.buildTriagePrompt(this.t);
+    
+    // 呼叫 LLM (Triage 偏好低溫以求穩定格式)
+    const modelResp = await this.chat.invokeChatModel(prompt, { 
+      maxTokens: 1000,
+      temperature: 0.2 
     });
+    const rawText = modelResp?.text ?? '';
 
-    const parsed = this.parseAndValidate(kind, modelResp?.text ?? '', maxChars);
-    if (!parsed.ok) return { status: 'failed', retryable: false, reason: 'VALIDATION_ERROR' };
+    // 1. 取得 SSOT Schema (從 YAML)
+    const spec = PromptBuilder.getSpec('triage', (this.t.metadata as any)?.prompt_id);
+    const schema = spec.outputs?.schema;
 
-    const finalText = kind === 'REPLY' ? (parsed.value.reply ?? '') : JSON.stringify(parsed.value);
-    const confidence = this.computeConfidence(modelResp, finalText);
+    // 2. 動態驗證
+    const validation = this.validateJsonWithSchema(rawText, schema);
+    if (!validation.ok) {
+      this.logger.warn('Triage validation failed', { errors: validation.errors, raw: rawText });
+      // 格式錯誤通常可以重試
+      return { status: 'failed', retryable: true, reason: `VALIDATION: ${validation.errors.join(', ')}` };
+    }
 
-    await this.fill(kind, parsed.value, {
-      confidence,
-      model_info: {
-        host: vscode.env.appName,
-        provider: modelResp?.provider || 'vscode.lm',
-        model: modelResp?.modelId || modelResp?.modelName || 'unknown',
-        latency_ms: modelResp?.latencyMs ?? 0,
-        prompt_tokens: modelResp?.usage?.promptTokens ?? 0,
-        completion_tokens: modelResp?.usage?.completionTokens ?? 0,
-      },
-      // 有些 orchestrator 沒 version；保守傳遞
-      ticket_version: (this.t as any)?.version ?? undefined,
+    // 3. 填回結果
+    const parsed = validation.value;
+    const decision = String(parsed.decision || '').toUpperCase();
+    const should_reply = decision === 'APPROVE';
+
+    const outputs = {
+      decision,
+      should_reply,
+      priority: should_reply ? 'P1' : 'P2',
+      short_reason: parsed.summary || '',
+      topics: parsed.reasons || [],
+      sentiment: 'neutral',
+      risk_tags: [],
+      ...parsed // 保留其他欄位
+    };
+
+    await this.api.fillTicketV1(this.getTicketId(), {
+      outputs,
+      by: this.formatModelId(modelResp),
+      tokens: this.extractTokens(modelResp)
     });
 
     return { status: 'drafted' };
   }
 
-  private resolveKind(t: Ticket): Kind | 'UNKNOWN' {
-    const configured = (t.metadata && (t.metadata as any).kind) as Kind | undefined;
-    const isReply =
-      configured === 'REPLY' ||
-      t.flow_id === 'reply_zh_hant_v1' ||
-      t.event.type === 'reply_request' ||
-      t.event.type === 'reply_candidate';
+  /* === REPLY FLOW: Agent Loop (Gen -> Guard -> Review -> Rewrite) === */
+  private async runReply(): Promise<RunResult> {
+    const promptId = process.env.ORCH_REPLY_PROMPT_ID;
+    const spec = PromptBuilder.getSpec('reply', promptId);
+    
+    // 提取純淨的 System Constraints 供 Reviewer 參考
+    const originalSystemConstraints = [
+      spec.sections?.system,
+      spec.sections?.assistant_style
+    ].filter(Boolean).join('\n\n');
 
-    if (isReply) return 'REPLY';
-    if (configured === 'TRIAGE' || t.flow_id === 'triage_zh_hant_v1' || t.event.type === 'triage_candidate') {
-      return 'TRIAGE';
-    }
-    return 'UNKNOWN';
-  }
+    // 初始 Generator Prompt
+    const initialGenPrompt = PromptBuilder.buildReplyPrompt(this.t);
 
-  private getMaxChars(t: Ticket, kind: Kind): number {
-    const rawMax = Number((t as any)?.constraints?.max_chars) || (kind === 'REPLY' ? this.replyMaxChars : 320);
-    return kind === 'REPLY' ? Math.min(rawMax, this.replyMaxChars) : rawMax;
-  }
+    let currentDraft = '';
+    let suggestion = '';
+    const processTrace: any[] = []; // 記錄 Agent 思考/修正軌跡
 
-  private parseAndValidate(kind: Kind, rawText: string, maxChars: number):
-    | { ok: true; value: any }
-    | { ok: false } {
-    if (kind === 'TRIAGE') {
-      const triage = TicketProcessor.validateTriage(rawText);
-      if (!triage.valid) return { ok: false };
-      return { ok: true, value: triage.parsed };
-    }
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      // [Phase 1: Generation]
+      const isRetry = attempt > 0;
+      const generationPrompt = isRetry
+        ? `${initialGenPrompt}\n\n[PREVIOUS DRAFT]\n${currentDraft}\n\n[REVIEWER FEEDBACK]\n${suggestion}\n\nPlease rewrite carefully based on the feedback.`
+        : initialGenPrompt;
 
-    // === REPLY：純文本 → 文本級 gate
-    const text = (rawText ?? '').toString().trim();
-    if (!text) return { ok: false };
-
-    const gate = PromptBuilder.validateResponse(text, {
-      lang: (this.t as any)?.constraints?.lang,
-      maxChars,
-    });
-    if (!gate.valid) return { ok: false };
-
-    return { ok: true, value: { reply: PromptBuilder.validateAndTrimResponse(text, maxChars) } };
-  }
-
-  private computeConfidence(modelResponse: any, finalText: string): number {
-    let c = 0.5;
-    if ((modelResponse?.latencyMs ?? 0) < 2000) c += 0.1;
-    else if ((modelResponse?.latencyMs ?? 0) > 10000) c -= 0.1;
-
-    const n = (finalText ?? '').length;
-    if (n > 50 && n < 300) c += 0.1;
-    else if (n < 20) c -= 0.2;
-
-    if (finalText.includes('？') || finalText.includes('澄清')) c += 0.1;
-    if (finalText.includes('確認') || finalText.includes('內部')) c += 0.1;
-    if (!/[。！？]$/.test(finalText)) c -= 0.1;
-    if (finalText.includes('...')) c -= 0.1;
-
-    return Math.max(0.1, Math.min(0.95, c));
-  }
-
-  private async fill(kind: Kind, parsed: any, base: Omit<FillRequest, 'draft'>): Promise<void> {
-    if (kind === 'TRIAGE') {
-      const decision = String(parsed.decision || '').toUpperCase();
-      const should_reply = decision === 'APPROVE';
-      const outputs = {
-        decision,
-        should_reply,
-        topics: parsed.reasons || [],
-        sentiment: 'neutral',
-        risk_tags: [],
-        priority: should_reply ? 'P1' : 'P2',
-        short_reason: parsed.summary || '',
-      };
-      await this.api.fillTicketV1((this.t as any).ticket_id || this.t.id, {
-        outputs,
-        by: `${base.model_info.provider}:${base.model_info.model}`,
-        tokens: { input: base.model_info.prompt_tokens, output: base.model_info.completion_tokens },
+      const genResp = await this.chat.invokeChatModel(generationPrompt, { 
+        maxTokens: this.replyMaxChars * 2,
+        temperature: 0.7 
       });
-      return;
+      currentDraft = genResp?.text?.trim() ?? '';
+
+      if (!currentDraft) {
+        return { status: 'failed', retryable: true, reason: 'EMPTY_GENERATION' };
+      }
+
+      // [Phase 2: Hard Guardrails] (程式碼層級檢查)
+      const hardCheck = PromptBuilder.validateReplyFormat(currentDraft, this.replyMaxChars);
+      if (!hardCheck.valid) {
+        const errorMsg = `Hard guardrail failed: ${hardCheck.errors.join(', ')}`;
+        this.logger.warn(errorMsg);
+        
+        processTrace.push({
+          step: attempt + 1,
+          timestamp: new Date().toISOString(),
+          action: 'hard_guard_check',
+          status: 'FAIL',
+          reason: errorMsg,
+          draft_snippet: currentDraft.slice(0, 50) + '...'
+        });
+
+        // 硬護欄失敗視為格式錯誤，給予回饋並重試
+        suggestion = `System check failed: ${hardCheck.errors.join(', ')}. Please strictly follow format rules.`;
+        if (attempt < this.maxRetries) continue;
+        else return { status: 'failed', retryable: false, reason: 'HARD_GUARDRAIL_FAIL' };
+      }
+
+      // [Phase 3: Soft Guardrails / Reviewer] (LLM 層級檢查)
+      // 構建 Reviewer Prompt
+      const reviewerPrompt = PromptBuilder.buildReviewerPrompt(
+        promptId,
+        originalSystemConstraints,
+        currentDraft
+      );
+
+      const reviewResp = await this.chat.invokeChatModel(reviewerPrompt, { 
+        maxTokens: 1000, 
+        temperature: 0.1 // Reviewer 需保持冷靜客觀
+      });
+      
+      const reviewValidation = this.validateJsonWithSchema(reviewResp?.text ?? '', spec.outputs?.reviewer_schema);
+      
+      // 若 Reviewer 輸出格式錯誤
+      if (!reviewValidation.ok) {
+        this.logger.warn('Reviewer output invalid JSON', { raw: reviewResp?.text });
+        processTrace.push({
+          step: attempt + 1,
+          timestamp: new Date().toISOString(),
+          action: 'reviewer_check',
+          status: 'ERROR',
+          raw_output: reviewResp?.text
+        });
+        // 策略：若 Reviewer 掛了但 Draft 過了硬護欄，在最後一次嘗試時可考慮放行(Fail Open)，或保守重試
+        suggestion = 'Reviewer system error. Please ensure standard output.';
+        continue;
+      }
+
+      const reviewResult = reviewValidation.value;
+      const verdict = String(reviewResult.final_verdict || 'FAIL').toUpperCase();
+      
+      processTrace.push({
+        step: attempt + 1,
+        timestamp: new Date().toISOString(),
+        action: 'reviewer_check',
+        verdict,
+        safety: reviewResult.safety_check,
+        quality: reviewResult.quality_check,
+        suggestion: reviewResult.suggestion
+      });
+
+      if (verdict === 'PASS') {
+        this.logger.info(`Reply passed review at attempt ${attempt + 1}`);
+        break; // 成功！
+      } else if (verdict === 'FAIL') {
+        // Reviewer 判定不可挽救 (如嚴重違規)
+        return { 
+          status: 'failed', 
+          retryable: false, 
+          reason: `REVIEWER_BLOCK: ${reviewResult.safety_check?.violation_reason || 'Safety Violation'}` 
+        };
+      } else {
+        // RETRY (可挽救)
+        suggestion = reviewResult.suggestion || 'Please improve quality and alignment.';
+        if (attempt === this.maxRetries) {
+          this.logger.warn('Max retries reached in agent loop');
+          return { status: 'failed', retryable: false, reason: 'MAX_RETRIES_EXCEEDED' };
+        }
+      }
     }
 
-    // === REPLY：把純文本包成 reply_result ===
-    const maxChars = this.getMaxChars(this.t, 'REPLY');
-    const replyText = PromptBuilder.validateAndTrimResponse(parsed.reply || '', maxChars);
+    // [Phase 4: Finalize]
+    const finalReply = PromptBuilder.validateAndTrimResponse(currentDraft, this.replyMaxChars);
 
-    const outputs = {
-      reply: replyText,
-      confidence: Number.isFinite(parsed.confidence) ? parsed.confidence : base.confidence,
-      citations: Array.isArray(parsed.citations) ? parsed.citations : [],
-      hashtags: Array.isArray(parsed.hashtags) ? parsed.hashtags : [],
-      tone_tags: Array.isArray(parsed.tone_tags) ? parsed.tone_tags : [],
-      needs_followup: typeof parsed.needs_followup === 'boolean' ? parsed.needs_followup : false,
-      followup_notes: typeof parsed.followup_notes === 'string' ? parsed.followup_notes : '',
-    };
-
-    await this.api.fillTicketV1((this.t as any).ticket_id || this.t.id, {
-      outputs,
-      by: `${base.model_info.provider}:${base.model_info.model}`,
-      tokens: { input: base.model_info.prompt_tokens, output: base.model_info.completion_tokens },
+    // 回填結果與軌跡
+    await this.api.fillTicketV1(this.getTicketId(), {
+      outputs: {
+        reply: finalReply,
+        confidence: 0.95, 
+        needs_followup: false,
+        followup_notes: '',
+        citations: [],
+        hashtags: [],
+        tone_tags: [],
+        process_trace: processTrace // 將完整的 Agent 思考過程回傳
+      },
+      by: 'vscode-worker-reviewed',
+      tokens: { input: 0, output: 0 } // 簡化
     });
+
+    return { status: 'drafted' };
   }
 
-  /* 暫時 triage 驗證，等 triage.yaml schema 定案後替換 */
-  private static validateTriage(raw: string): { valid: boolean; errors: string[]; parsed?: any } {
+  /* === Helpers === */
+
+  private getTicketId(): string {
+    return (this.t as any).ticket_id || this.t.id;
+  }
+
+  private formatModelId(resp: any): string {
+    return `${resp?.provider || 'vscode'}:${resp?.modelName || 'unknown'}`;
+  }
+
+  private extractTokens(resp: any): { input: number; output: number } {
+    return {
+      input: resp?.usage?.promptTokens || 0,
+      output: resp?.usage?.completionTokens || 0
+    };
+  }
+
+  // 通用 JSON 驗證器 (Runtime Schema Validation)
+  private validateJsonWithSchema(text: string, schema: any): { ok: true; value: any } | { ok: false; errors: string[] } {
+    const json = this.safeParseJson(text);
+    if (!json) return { ok: false, errors: ['JSON_PARSE_FAILED'] };
+
+    if (!schema) return { ok: true, value: json };
+
     const errors: string[] = [];
-    const text = (raw ?? '').toString().trim();
-    let obj: any;
-    try { obj = JSON.parse(text); } catch { return { valid: false, errors: ['JSON 解析失敗'] }; }
+    
+    // 1. Required fields check
+    if (schema.required && Array.isArray(schema.required)) {
+      for (const field of schema.required) {
+        if (!(field in json)) errors.push(`Missing field: ${field}`);
+      }
+    }
+    
+    // 2. Properties check (含 Enum 與 Nested Objects)
+    if (schema.properties) {
+      for (const [key, propSpec] of Object.entries(schema.properties) as [string, any][]) {
+        const val = json[key];
+        if (val !== undefined) {
+           // Enum Check
+           if (propSpec.enum && !propSpec.enum.includes(val)) {
+             errors.push(`Invalid enum for ${key}: got ${val}`);
+           }
+           // Nested Object Check (遞迴檢查第一層)
+           if (propSpec.type === 'object' && propSpec.required && typeof val === 'object') {
+             for (const nestedReq of propSpec.required) {
+               if (!(nestedReq in val)) errors.push(`Missing nested field: ${key}.${nestedReq}`);
+             }
+           }
+        }
+      }
+    }
 
-    const validDecision = ['APPROVE','SKIP','FLAG'];
-    if (!validDecision.includes((obj?.decision || '').toUpperCase())) errors.push('decision 值不合法');
-    if (typeof obj?.confidence !== 'number' || obj.confidence < 0 || obj.confidence > 1) errors.push('confidence 範圍錯誤');
-    if (!Array.isArray(obj?.reasons)) errors.push('reasons 必須為陣列');
-    if (typeof obj?.summary !== 'string' || obj.summary.trim().length < 4) errors.push('summary 太短');
-    if (!obj?.signals || typeof obj.signals !== 'object') errors.push('signals 缺失');
+    return errors.length ? { ok: false, errors } : { ok: true, value: json };
+  }
 
-    return { valid: errors.length === 0, errors, parsed: obj };
+  private safeParseJson(text?: string): any {
+    if (!text) return null;
+    try {
+      // 移除 Markdown 圍欄，確保乾淨解析
+      const clean = text.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+      return JSON.parse(clean);
+    } catch { return null; }
   }
 }
