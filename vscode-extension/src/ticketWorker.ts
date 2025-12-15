@@ -3,7 +3,8 @@ import { Logger } from './logger';
 import { Config } from './config';
 import { ApiClient } from './apiClient';
 import { ChatInvoker } from './chatInvoker';
-import { PromptBuilder, UnsupportedTicketKindError } from './promptBuilder';
+// [FIX] 導入 LoadedSpec
+import { PromptBuilder, LoadedSpec } from './promptBuilder';
 import { Ticket, ProcessingError, WorkerStatus } from './types';
 
 type Kind = 'TRIAGE' | 'REPLY';
@@ -96,8 +97,6 @@ export class TicketWorker implements vscode.Disposable {
 
   private async tryRefillImmediately(trigger: string): Promise<void> {
     if (!this.isRunning) return;
-    
-    // 並發控制
     const slots = this.maxConcurrency - this.activeTickets.size;
     if (slots <= 0 || this.isRefilling) return;
 
@@ -109,7 +108,7 @@ export class TicketWorker implements vscode.Disposable {
       const leased = await this.leaseBatch(batch);
       
       if (leased.length > 0) {
-        this.logger.info(`Leased ${leased.length} tickets`, { trigger });
+        // [LOG] 只有真的領到票才印出，避免洗版
         for (const t of leased) {
           void this.processTicket(t).catch(err => {
             this.logger.error(`Unhandled process error ticket=${t.id}`, err);
@@ -136,8 +135,6 @@ export class TicketWorker implements vscode.Disposable {
     const active = this.kinds;
     if (!active.length) return 'TRIAGE';
     if (active.length === 1) return active[0];
-    
-    // round_robin fallback
     const k = active[this.rrIndex % active.length];
     this.rrIndex = (this.rrIndex + 1) % active.length;
     return k;
@@ -145,11 +142,12 @@ export class TicketWorker implements vscode.Disposable {
 
   private async leaseOne(kind: Kind): Promise<Ticket | undefined> {
     try {
-      // llm.generate 是目前唯一的 capability 要求
       const caps = ['llm.generate'];
+      const leaseSec = 300; 
+
       const acquired = this.useV1Lease
-        ? await this.apiClient.leaseTicketsV1(kind, 1, 90, caps)
-        : await this.apiClient.leaseTickets({ limit: 1, lease_sec: 90, capabilities: caps, kind });
+        ? await this.apiClient.leaseTicketsV1(kind, 1, leaseSec, caps)
+        : await this.apiClient.leaseTickets({ limit: 1, lease_sec: leaseSec, capabilities: caps, kind });
 
       if (acquired && acquired.length > 0) {
         const t = acquired[0];
@@ -157,7 +155,7 @@ export class TicketWorker implements vscode.Disposable {
         (t.metadata as any).kind = kind;
         return t;
       }
-    } catch (e) { /* ignore lease errors (queue empty etc) */ }
+    } catch (e) { /* ignore */ }
     return undefined;
   }
 
@@ -168,7 +166,9 @@ export class TicketWorker implements vscode.Disposable {
     if (this.activeTickets.has(ticketId)) return;
     this.activeTickets.add(ticketId);
 
-    this.logger.info(`Processing ticket ${ticketId}`, { flow: ticket.flow_id });
+    // [LOG] 加入生命週期日誌：開始
+    const flowType = (ticket.metadata as any)?.kind || ticket.flow_id;
+    this.logger.info(`🚀 [START] Processing Ticket: ${ticketId} (${flowType})`);
 
     try {
       const proc = new TicketProcessor({
@@ -184,24 +184,28 @@ export class TicketWorker implements vscode.Disposable {
       if (result.status === 'failed') {
         if (result.retryable) {
           await this.apiClient.nackTicket(ticketId);
-          this.logger.info(`Nacked ticket ${ticketId}`, { reason: result.reason });
+          this.logger.info(`⚠️ [NACK] Ticket ${ticketId} returned to queue`, { reason: result.reason });
         } else {
           await this.markFailed(ticketId, result.reason || 'UNKNOWN_ERROR');
+          this.logger.error(`❌ [FAIL] Ticket ${ticketId} failed permanently`, { reason: result.reason });
         }
       } else {
-        this.logger.info(`Ticket ${ticketId} completed`);
+        // [LOG] 加入生命週期日誌：完成
+        this.logger.info(`✅ [DONE] Ticket ${ticketId} completed successfully.`);
       }
 
     } catch (error: any) {
+      // [FIX] 改進錯誤日誌，顯示 Stack Trace 以便除錯
       const msg = error?.message || String(error);
-      this.logger.error(`Process crash ${ticketId}`, error);
-      // 未預期的崩潰視為可重試（可能是網路或暫時性問題）
+      const stack = error?.stack || '';
+      
+      this.logger.error(`🔥 [CRASH] Ticket ${ticketId}`, { message: msg, stack });
+      
       await this.apiClient.nackTicket(ticketId); 
       this.recordError({ type: 'unknown', message: msg, retryable: true, ticketId });
     } finally {
       this.activeTickets.delete(ticketId);
       this.updatePanel();
-      // 處理完一張，立即嘗試補貨，維持滿載
       void this.tryRefillImmediately('onFinish');
     }
   }
@@ -263,7 +267,7 @@ class TicketProcessor {
   private chat: ChatInvoker;
   private logger: Logger;
   private replyMaxChars: number;
-  private maxRetries = 2; // 自我修正最大嘗試次數
+  private maxRetries = 2;
 
   constructor({ ticket, apiClient, chatInvoker, logger, replyMaxChars }: ProcessorDeps) {
     this.t = ticket;
@@ -289,7 +293,6 @@ class TicketProcessor {
     const configured = (t.metadata && (t.metadata as any).kind) as Kind | undefined;
     if (configured) return configured;
     
-    // Fallback: 根據 flow_id 或 event type 判斷
     const fid = t.flow_id || '';
     const eid = t.event?.type || '';
     if (fid.includes('reply') || eid.includes('reply')) return 'REPLY';
@@ -298,33 +301,64 @@ class TicketProcessor {
     return 'UNKNOWN';
   }
 
-  /* === TRIAGE FLOW: YAML Schema Driven === */
+  /* === TRIAGE FLOW (X-RAY 診斷版 v2) === */
   private async runTriage(): Promise<RunResult> {
+    
+    // [X-RAY 1] 檢查從 ApiClient 拿到的「完整」票據內容
+    const fullContent = this.t.event?.content || "";
+    this.logger.info(`🔍 [X-RAY 1] Worker Input Data (Ticket Raw)`, {
+        id: this.t.id,
+        // 這裡會印出全部內容，請在 Console 確認它是否完整
+        event_content_full: fullContent ? fullContent : "❌ MISSING (ApiClient Fault)",
+        content_length: fullContent.length,
+        full_metadata: this.t.metadata
+    });
+
+    // 呼叫 PromptBuilder (如果讀不到檔案，這裡會拋出 Error，被 processTicket 接住並印出 Stack)
     const prompt = PromptBuilder.buildTriagePrompt(this.t);
     
-    // 呼叫 LLM (Triage 偏好低溫以求穩定格式)
+    // [X-RAY 2] 檢查 PromptBuilder 的產出
+    const targetIdx = prompt.indexOf("TARGET CONTENT");
+    const contentInPrompt = fullContent ? prompt.includes(fullContent.substring(0, 20)) : false;
+
+    this.logger.info(`🔍 [X-RAY 2] Builder Output Check`, {
+        has_target_section: targetIdx !== -1,
+        content_injected_successfully: contentInPrompt ? "✅ YES" : "❌ NO (Builder/YAML Fault)",
+        prompt_snippet: targetIdx !== -1 
+            ? prompt.substring(targetIdx, targetIdx + 300).replace(/\n/g, ' ') 
+            : "Prompt structure seems broken (Header missing)"
+    });
+
+    // Crash Diagnosis
+    if (fullContent && !contentInPrompt) {
+        this.logger.error(`🔥 [CRASH DIAGNOSIS] Data dropped between Worker and Builder! Check variable names in YAML.`);
+    }
+
+    // 呼叫 LLM
     const modelResp = await this.chat.invokeChatModel(prompt, { 
       maxTokens: 1000,
       temperature: 0.2 
     });
     const rawText = modelResp?.text ?? '';
 
-    // 1. 取得 SSOT Schema (從 YAML)
+    // 載入 Schema 進行驗證
     const spec = PromptBuilder.getSpec('triage', (this.t.metadata as any)?.prompt_id);
     const schema = spec.outputs?.schema;
 
-    // 2. 動態驗證
     const validation = this.validateJsonWithSchema(rawText, schema);
     if (!validation.ok) {
       this.logger.warn('Triage validation failed', { errors: validation.errors, raw: rawText });
-      // 格式錯誤通常可以重試
       return { status: 'failed', retryable: true, reason: `VALIDATION: ${validation.errors.join(', ')}` };
     }
 
-    // 3. 填回結果
     const parsed = validation.value;
     const decision = String(parsed.decision || '').toUpperCase();
     const should_reply = decision === 'APPROVE';
+
+    this.logger.info(`🧠 [TRIAGE] Decision: ${decision}`, {
+        reason: parsed.summary || parsed.short_reason,
+        target_content_detected: this.t.event?.content ? "YES" : "NO"
+    });
 
     const outputs = {
       decision,
@@ -334,7 +368,10 @@ class TicketProcessor {
       topics: parsed.reasons || [],
       sentiment: 'neutral',
       risk_tags: [],
-      ...parsed // 保留其他欄位
+      target_prompt_id: parsed.target_prompt_id, 
+      reply_strategy: parsed.reply_strategy,
+      information_needs: parsed.information_needs || [],
+      ...parsed
     };
 
     await this.api.fillTicketV1(this.getTicketId(), {
@@ -346,26 +383,34 @@ class TicketProcessor {
     return { status: 'drafted' };
   }
 
-  /* === REPLY FLOW: Agent Loop (Gen -> Guard -> Review -> Rewrite) === */
+  /* === REPLY FLOW === */
   private async runReply(): Promise<RunResult> {
-    const promptId = process.env.ORCH_REPLY_PROMPT_ID;
+    const metadata = this.t.metadata || {};
+    const replyInput = metadata.reply_input || {};
+    const promptId = metadata.prompt_id || process.env.ORCH_REPLY_PROMPT_ID || 'reply.standard'; 
+    
+    // [LOG] 顯示收到的彈藥與戰略
+    this.logger.info(`📦 [REPLY INPUT] Strategy: "${replyInput.strategy || 'N/A'}"`);
+    if (replyInput.context_notes && replyInput.context_notes.length > 5) {
+        this.logger.info(`📚 [CONTEXT] Received NotebookLM data (${replyInput.context_notes.length} chars)`);
+    } else {
+        this.logger.warn(`⚠️ [CONTEXT] No context data received from Orchestrator`);
+    }
+
     const spec = PromptBuilder.getSpec('reply', promptId);
     
-    // 提取純淨的 System Constraints 供 Reviewer 參考
     const originalSystemConstraints = [
       spec.sections?.system,
       spec.sections?.assistant_style
     ].filter(Boolean).join('\n\n');
 
-    // 初始 Generator Prompt
     const initialGenPrompt = PromptBuilder.buildReplyPrompt(this.t);
 
     let currentDraft = '';
     let suggestion = '';
-    const processTrace: any[] = []; // 記錄 Agent 思考/修正軌跡
+    const processTrace: any[] = []; 
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      // [Phase 1: Generation]
       const isRetry = attempt > 0;
       const generationPrompt = isRetry
         ? `${initialGenPrompt}\n\n[PREVIOUS DRAFT]\n${currentDraft}\n\n[REVIEWER FEEDBACK]\n${suggestion}\n\nPlease rewrite carefully based on the feedback.`
@@ -381,7 +426,7 @@ class TicketProcessor {
         return { status: 'failed', retryable: true, reason: 'EMPTY_GENERATION' };
       }
 
-      // [Phase 2: Hard Guardrails] (程式碼層級檢查)
+      // Hard Guardrails
       const hardCheck = PromptBuilder.validateReplyFormat(currentDraft, this.replyMaxChars);
       if (!hardCheck.valid) {
         const errorMsg = `Hard guardrail failed: ${hardCheck.errors.join(', ')}`;
@@ -396,14 +441,12 @@ class TicketProcessor {
           draft_snippet: currentDraft.slice(0, 50) + '...'
         });
 
-        // 硬護欄失敗視為格式錯誤，給予回饋並重試
         suggestion = `System check failed: ${hardCheck.errors.join(', ')}. Please strictly follow format rules.`;
         if (attempt < this.maxRetries) continue;
         else return { status: 'failed', retryable: false, reason: 'HARD_GUARDRAIL_FAIL' };
       }
 
-      // [Phase 3: Soft Guardrails / Reviewer] (LLM 層級檢查)
-      // 構建 Reviewer Prompt
+      // Reviewer Check
       const reviewerPrompt = PromptBuilder.buildReviewerPrompt(
         promptId,
         originalSystemConstraints,
@@ -412,12 +455,11 @@ class TicketProcessor {
 
       const reviewResp = await this.chat.invokeChatModel(reviewerPrompt, { 
         maxTokens: 1000, 
-        temperature: 0.1 // Reviewer 需保持冷靜客觀
+        temperature: 0.1 
       });
       
       const reviewValidation = this.validateJsonWithSchema(reviewResp?.text ?? '', spec.outputs?.reviewer_schema);
       
-      // 若 Reviewer 輸出格式錯誤
       if (!reviewValidation.ok) {
         this.logger.warn('Reviewer output invalid JSON', { raw: reviewResp?.text });
         processTrace.push({
@@ -427,7 +469,6 @@ class TicketProcessor {
           status: 'ERROR',
           raw_output: reviewResp?.text
         });
-        // 策略：若 Reviewer 掛了但 Draft 過了硬護欄，在最後一次嘗試時可考慮放行(Fail Open)，或保守重試
         suggestion = 'Reviewer system error. Please ensure standard output.';
         continue;
       }
@@ -447,16 +488,14 @@ class TicketProcessor {
 
       if (verdict === 'PASS') {
         this.logger.info(`Reply passed review at attempt ${attempt + 1}`);
-        break; // 成功！
+        break; 
       } else if (verdict === 'FAIL') {
-        // Reviewer 判定不可挽救 (如嚴重違規)
         return { 
           status: 'failed', 
           retryable: false, 
           reason: `REVIEWER_BLOCK: ${reviewResult.safety_check?.violation_reason || 'Safety Violation'}` 
         };
       } else {
-        // RETRY (可挽救)
         suggestion = reviewResult.suggestion || 'Please improve quality and alignment.';
         if (attempt === this.maxRetries) {
           this.logger.warn('Max retries reached in agent loop');
@@ -465,10 +504,11 @@ class TicketProcessor {
       }
     }
 
-    // [Phase 4: Finalize]
     const finalReply = PromptBuilder.validateAndTrimResponse(currentDraft, this.replyMaxChars);
 
-    // 回填結果與軌跡
+    // [LOG] 顯示生成的預覽
+    this.logger.info(`✍️ [GENERATED] Reply Preview: "${finalReply.slice(0, 50)}..."`);
+
     await this.api.fillTicketV1(this.getTicketId(), {
       outputs: {
         reply: finalReply,
@@ -478,10 +518,11 @@ class TicketProcessor {
         citations: [],
         hashtags: [],
         tone_tags: [],
-        process_trace: processTrace // 將完整的 Agent 思考過程回傳
+        used_strategy: promptId,
+        process_trace: processTrace
       },
       by: 'vscode-worker-reviewed',
-      tokens: { input: 0, output: 0 } // 簡化
+      tokens: { input: 0, output: 0 } 
     });
 
     return { status: 'drafted' };
@@ -504,7 +545,6 @@ class TicketProcessor {
     };
   }
 
-  // 通用 JSON 驗證器 (Runtime Schema Validation)
   private validateJsonWithSchema(text: string, schema: any): { ok: true; value: any } | { ok: false; errors: string[] } {
     const json = this.safeParseJson(text);
     if (!json) return { ok: false, errors: ['JSON_PARSE_FAILED'] };
@@ -513,23 +553,19 @@ class TicketProcessor {
 
     const errors: string[] = [];
     
-    // 1. Required fields check
     if (schema.required && Array.isArray(schema.required)) {
       for (const field of schema.required) {
         if (!(field in json)) errors.push(`Missing field: ${field}`);
       }
     }
     
-    // 2. Properties check (含 Enum 與 Nested Objects)
     if (schema.properties) {
       for (const [key, propSpec] of Object.entries(schema.properties) as [string, any][]) {
         const val = json[key];
         if (val !== undefined) {
-           // Enum Check
            if (propSpec.enum && !propSpec.enum.includes(val)) {
              errors.push(`Invalid enum for ${key}: got ${val}`);
            }
-           // Nested Object Check (遞迴檢查第一層)
            if (propSpec.type === 'object' && propSpec.required && typeof val === 'object') {
              for (const nestedReq of propSpec.required) {
                if (!(nestedReq in val)) errors.push(`Missing nested field: ${key}.${nestedReq}`);
@@ -545,7 +581,6 @@ class TicketProcessor {
   private safeParseJson(text?: string): any {
     if (!text) return null;
     try {
-      // 移除 Markdown 圍欄，確保乾淨解析
       const clean = text.replace(/^```json\s*/, '').replace(/\s*```$/, '');
       return JSON.parse(clean);
     } catch { return null; }

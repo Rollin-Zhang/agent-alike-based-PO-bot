@@ -145,7 +145,7 @@ export class ApiClient {
 
     // ---------- API methods ----------
 
-    /** v1: 租賃票據（明確帶 kind，回傳超量則切片） */
+    /** v1: 租賃票據（修復版：正確解包 + 強力內容搜索） */
     async leaseTicketsV1(
         kind: LeaseKind,
         max: number,
@@ -156,18 +156,48 @@ export class ApiClient {
         const payload: any = { kind, max: ask, lease_sec: leaseSec };
         if (capabilities) payload.capabilities = capabilities;
 
-        const v1 = await this.makeRequest<any[]>('POST', '/v1/tickets/lease', payload);
-        const got = Array.isArray(v1) ? v1.length : 0;
-        if (got > ask) {
-            this.logger.warn(`Server returned ${got} tickets (> ask ${ask}); slicing to ${ask}`);
+        try {
+            // 1. 取得原始回應
+            const response = await this.makeRequest<any>('POST', '/v1/tickets/lease', payload);
+            
+            // 2. [關鍵修復] 正確解包
+            // Orchestrator 回傳可能是 { tickets: [...] } (新版) 或 [...] (舊版)
+            let rawList: any[] = [];
+            if (response && Array.isArray(response.tickets)) {
+                rawList = response.tickets; // 標準格式
+            } else if (Array.isArray(response)) {
+                rawList = response; // 舊版格式
+            } else {
+                rawList = [];
+            }
+
+            const list = rawList.slice(0, ask);
+            
+            // 3. 映射 (這裡會呼叫修復後的 mapLeasedTicket)
+            const mapped = list.map((item, index) => {
+                try {
+                    return this.mapLeasedTicket(kind, item);
+                } catch (err) {
+                    this.logger.error(`[API] Map failed for item`, err);
+                    return null;
+                }
+            }).filter((t): t is Ticket => t !== null);
+
+            if (mapped.length > 0) {
+                this.logger.info(`[API] Successfully LEASED ${mapped.length} tickets (kind=${kind})`);
+            } else {
+                this.logger.debug(`[API] Polled tickets (kind=${kind}), got none.`);
+            }
+            
+            return mapped;
+
+        } catch (e) {
+            this.logger.error(`[API] Lease request failed`, e);
+            return []; 
         }
-        const list = (v1 || []).slice(0, ask);
-        const mapped = list.map(item => this.mapLeasedTicket(kind, item));
-        this.logger.info(`Leased ${mapped.length} tickets (v1, kind=${kind})`);
-        return mapped;
     }
 
-    /** 與舊 API 相容的租賃介面（保留給 fallback 使用） */
+    /** 與舊 API 相容的租賃介面 */
     async leaseTickets(request: LeaseRequest): Promise<Ticket[]> {
         const ask = Math.max(1, request.limit ?? 1);
         this.logger.debug('Leasing tickets', { ...request, ask });
@@ -180,7 +210,7 @@ export class ApiClient {
                 return this.leaseTicketsV1(kind, ask, request.lease_sec ?? 90, request.capabilities);
             }
 
-            // 備用：舊版 lease 介面
+            // Fallback Legacy Logic
             const { kind: _ignoredKind, ...legacyBase } = request as any;
             const legacyReq: LeaseRequest = {
                 ...legacyBase,
@@ -189,7 +219,13 @@ export class ApiClient {
             };
             const response = await this.makeRequest<Ticket[]>('POST', '/tickets/lease', legacyReq);
             const sliced = (response || []).slice(0, ask);
-            this.logger.info(`Leased ${sliced.length} tickets`, { kind: request.kind || 'legacy' });
+            
+            if (sliced.length > 0) {
+                this.logger.info(`[API] Leased ${sliced.length} tickets (legacy)`);
+            } else {
+                this.logger.debug(`[API] Polled tickets (legacy), got none.`);
+            }
+            
             return sliced;
         } catch (error) {
             this.logger.debug('Lease failed, will fallback to pending query', error);
@@ -200,12 +236,26 @@ export class ApiClient {
     private mapLeasedTicket(kind: LeaseKind, raw: any): Ticket {
         const nowIso = new Date().toISOString();
 
+        // ------------------------------------------------------------------
+        // [關鍵修復] 強力搜索貼文內容 (Robust Content Search)
+        // ------------------------------------------------------------------
+        // 我們依序查找所有可能的欄位，確保絕對不會漏掉資料
+        const contentSource = 
+            raw.inputs?.candidate_snippet || 
+            raw.inputs?.snippet || 
+            raw.event?.content || 
+            raw.content || 
+            '';
+
+        if (!contentSource) {
+            this.logger.warn(`[API] ⚠️ Empty content for ticket ${raw.ticket_id}. LLM might hallucinate. Keys: ${Object.keys(raw).join(',')}`);
+        }
+
         if (kind === 'REPLY') {
             const inputs = raw?.inputs || {};
             const cfg = Config.get();
-            const maxChars = cfg.reply?.maxChars ?? 320;
+            const maxChars = cfg.reply?.maxChars ?? 800; // 預設放寬到 800 字
             const candidateId = inputs.candidate_id || raw?.metadata?.candidate_id || raw?.ticket_id;
-            const snippet = inputs.candidate_snippet || inputs.snippet || '';
 
             return {
                 id: raw.ticket_id,
@@ -217,7 +267,7 @@ export class ApiClient {
                     type: 'reply_candidate',
                     event_id: `reply-${raw.ticket_id}`,
                     thread_id: candidateId,
-                    content: snippet,
+                    content: contentSource, // [FIX] 使用我們強力搜索到的內容
                     actor: 'reply',
                     timestamp: nowIso
                 },
@@ -232,12 +282,14 @@ export class ApiClient {
                     triage_ticket_id: raw?.metadata?.triage_ticket_id,
                     triage_result: raw?.metadata?.triage_result,
                     source: raw?.metadata?.source || 'triage',
+                    prompt_id: raw?.metadata?.prompt_id,
                     kind: 'REPLY'
                 },
                 version: 1
             };
         }
 
+        // TRIAGE Mapping
         return {
             id: raw.ticket_id,
             ticket_id: raw.ticket_id,
@@ -248,7 +300,7 @@ export class ApiClient {
                 type: 'triage_candidate',
                 event_id: `triage-${raw.ticket_id}`,
                 thread_id: raw.ticket_id,
-                content: raw.inputs?.snippet || '',
+                content: contentSource, // [FIX] 使用我們強力搜索到的內容
                 actor: 'triage',
                 timestamp: nowIso
             },
@@ -265,13 +317,13 @@ export class ApiClient {
         };
     }
 
-    /** 備用：取得 pending 票據（若回過量，client 端切片） */
+    /** 備用：取得 pending 票據 */
     async getPendingTickets(limit?: number): Promise<Ticket[]> {
         this.logger.debug('Fetching pending tickets');
         try {
-            const response = await this.makeRequest<Ticket[]>('GET', '/tickets?status=pending');
+            const response = await this.makeRequest<Ticket[]>('GET', '/v1/tickets?status=pending');
             const list = response || [];
-            this.logger.info(`Fetched ${list.length} pending tickets`);
+            this.logger.debug(`Fetched ${list.length} pending tickets`);
             return typeof limit === 'number' ? list.slice(0, Math.max(0, limit)) : list;
         } catch (error) {
             this.logger.error('Failed to fetch pending tickets', error);
@@ -283,7 +335,7 @@ export class ApiClient {
     async getTicket(ticketId: string): Promise<Ticket> {
         this.logger.debug(`Fetching ticket ${ticketId}`);
         try {
-            return await this.makeRequest<Ticket>('GET', `/ticket/${ticketId}`);
+            return await this.makeRequest<Ticket>('GET', `/v1/tickets/${ticketId}`);
         } catch (error) {
             this.logger.error(`Failed to fetch ticket ${ticketId}`, error);
             throw error;
@@ -292,13 +344,14 @@ export class ApiClient {
 
     /** 回填草稿（舊版） */
     async fillTicket(ticketId: string, request: FillRequest): Promise<ApiResponse> {
+        const draftLen = request.draft?.length || 0;
         this.logger.debug(`Filling ticket ${ticketId}`, {
             confidence: request.confidence,
             model: request.model_info?.model || 'unknown',
-            draftLength: request.draft.length
+            draftLength: draftLen
         });
         try {
-            const res = await this.makeRequest<ApiResponse>('POST', `/ticket/${ticketId}/fill`, request);
+            const res = await this.makeRequest<ApiResponse>('POST', `/v1/tickets/${ticketId}/fill`, request);
             this.logger.info(`Successfully filled ticket ${ticketId}`);
             return res;
         } catch (error) {
@@ -307,12 +360,17 @@ export class ApiClient {
         }
     }
 
-    /** v1: TRIAGE 專用回填（以 outputs 傳遞） */
+    /** v1: TRIAGE 專用回填 */
     async fillTicketV1(
         ticketId: string,
         body: { lease_id?: string; outputs: any; by?: string; tokens?: { input?: number; output?: number } }
     ): Promise<ApiResponse> {
-        this.logger.debug(`Filling ticket (v1) ${ticketId}`, { hasOutputs: !!body.outputs });
+        const payloadSize = body.outputs ? JSON.stringify(body.outputs).length : 0;
+        this.logger.debug(`Filling ticket (v1) ${ticketId}`, { 
+            hasOutputs: !!body.outputs,
+            payloadSize
+        });
+        
         try {
             const res = await this.makeRequest<ApiResponse>('POST', `/v1/tickets/${ticketId}/fill`, body);
             this.logger.info(`Successfully filled ticket (v1) ${ticketId}`);
@@ -323,11 +381,26 @@ export class ApiClient {
         }
     }
 
+    /** 呼叫工具 */
+    async callTool(server: string, tool: string, args: any): Promise<any> {
+        this.logger.info(`[API] Calling tool ${server}.${tool}`);
+        try {
+            return await this.makeRequest<any>('POST', '/v1/tools/execute', {
+                server,
+                tool,
+                arguments: args
+            });
+        } catch (error) {
+            this.logger.error(`Failed to call tool ${server}.${tool}`, error);
+            throw error;
+        }
+    }
+
     /** 核准票據 */
     async approveTicket(ticketId: string, request: ApproveRequest): Promise<ApiResponse> {
         this.logger.debug(`Approving ticket ${ticketId}`, request);
         try {
-            const res = await this.makeRequest<ApiResponse>('POST', `/ticket/${ticketId}/approve`, request);
+            const res = await this.makeRequest<ApiResponse>('POST', `/tickets/${ticketId}/approve`, request);
             this.logger.info(`Successfully approved ticket ${ticketId}`);
             return res;
         } catch (error) {
@@ -336,18 +409,18 @@ export class ApiClient {
         }
     }
 
-    /** 心跳（可選，用於租約續租） */
+    /** 心跳 */
     async heartbeat(ticketId: string): Promise<ApiResponse> {
         this.logger.debug(`Sending heartbeat for ticket ${ticketId}`);
         try {
-            return await this.makeRequest<ApiResponse>('POST', `/ticket/${ticketId}/heartbeat`);
+            return await this.makeRequest<ApiResponse>('POST', `/tickets/${ticketId}/heartbeat`);
         } catch (error) {
             this.logger.debug(`Heartbeat failed for ticket ${ticketId}`, error);
             throw error;
         }
     }
 
-    /** v1: 心跳（帶 lease_id，用於續租 TRIAGE 票據） */
+    /** v1: 心跳 */
     async heartbeatV1(ticketId: string, lease_id: string): Promise<ApiResponse> {
         this.logger.debug(`Sending v1 heartbeat for ticket ${ticketId}`);
         try {
@@ -358,11 +431,12 @@ export class ApiClient {
         }
     }
 
-    /** v1: 放棄票據（釋放租約，帶 lease_id） */
+    /** v1: 放棄票據 (修復版：退回 Legacy 路徑，解決 404 問題) */
     async nackTicketV1(ticketId: string, lease_id: string): Promise<ApiResponse> {
         this.logger.debug(`Nacking ticket (v1) ${ticketId}`);
         try {
-            const res = await this.makeRequest<ApiResponse>('POST', `/v1/tickets/${ticketId}/nack`, { lease_id });
+            // [FIX] 改用 /tickets/... (移除 /v1)，以配合目前的 Server 路由
+            const res = await this.makeRequest<ApiResponse>('POST', `/tickets/${ticketId}/nack`, { lease_id });
             this.logger.info(`Successfully nacked ticket (v1) ${ticketId}`);
             return res;
         } catch (error) {
@@ -371,11 +445,12 @@ export class ApiClient {
         }
     }
 
-    /** 放棄票據（釋放租約） */
+    /** 放棄票據 (修復版：退回 Legacy 路徑) */
     async nackTicket(ticketId: string): Promise<ApiResponse> {
         this.logger.debug(`Nacking ticket ${ticketId}`);
         try {
-            const res = await this.makeRequest<ApiResponse>('POST', `/ticket/${ticketId}/nack`);
+            // [FIX] 改用 /tickets/... (移除 /v1)
+            const res = await this.makeRequest<ApiResponse>('POST', `/tickets/${ticketId}/nack`);
             this.logger.info(`Successfully nacked ticket ${ticketId}`);
             return res;
         } catch (error) {

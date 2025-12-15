@@ -170,7 +170,8 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
+    "copy-prompts": "node ./scripts/copy-prompts.js",
+    "compile": "npm run copy-prompts && tsc -p ./",
     "watch": "tsc -watch -p ./"
   },
   "devDependencies": {

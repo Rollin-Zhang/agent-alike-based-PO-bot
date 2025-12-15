@@ -1,243 +1,192 @@
-# PO Bot LLM 問答系統完整運行指南
+# Agent-PO-Bot（v4.1）LLM Worker 運行指南
 
-## 🎯 系統概述
+本文件是針對「Orchestrator + VS Code Extension Worker」的端到端運行說明，內容以目前程式碼庫狀態（v4.1）為準。
 
-這是一個智能產品經理 (PO) 助理機器人系統，使用 LLM 技術自動處理各種工作票據和問答任務。系統分為三個主要組件：
+若要理解架構設計與模組責任，請搭配閱讀：`ARCHITECTURE.md`。
 
-1. **Orchestrator** - 後端調度服務 (http://localhost:3000)
-2. **VS Code Extension** - 前端用戶界面
-3. **測試腳本** - 自動化驗證工具
+---
 
-## 🚀 快速啟動指南
+## 1. 系統概述
 
-### 步驟 1: 啟動 Orchestrator 服務
+系統由兩個核心元件組成：
 
-```bash
-# 進入 orchestrator 目錄
-cd /Users/wangshihya/agent-alike_based_PO_bot/orchestrator
+1. **Orchestrator（Server）**
+   - 提供 API：攝入事件、租賃票據（lease）、回填結果（fill）、提供監控（metrics）。
+   - 在 TRIAGE 完成且決策為 APPROVE 時，自動提升到 REPLY 階段，並可透過 NotebookLM MCP 取得外部 context。
+2. **VS Code Extension（Worker）**
+   - 週期性向 Orchestrator 租賃票據。
+   - 使用 VS Code Chat API（例如 Copilot）在本機執行 TRIAGE/REPLY 推論。
+   - 回填結果到 Orchestrator 的 `/v1/tickets/:id/fill`。
 
-# 確認環境配置 (DRY_RUN=false)
-cat .env
+本版本的主流程是「TRIAGE →（必要時）REPLY」，而非單純的 Q&A 問答系統。
 
-# 啟動服務
-node index.js &
+---
 
-# 檢查服務狀態
-curl -s http://localhost:3000/health
-```
+## 2. 快速啟動
 
-**預期輸出：**
-```json
-{
-  "status": "healthy",
-  "uptime": X.X,
-  "queue_depth": 0,
-  "last_poll": "2025-09-22T...",
-  "timestamp": "2025-09-22T...",
-  "dry_run": false
-}
-```
-
-### 步驟 2: 編譯 VS Code Extension
+### 2.1 啟動 Orchestrator
 
 ```bash
-# 進入 vscode-extension 目錄
-cd /Users/wangshihya/agent-alike_based_PO_bot/vscode-extension
-
-# 安裝依賴
+cd orchestrator
 npm install
-
-# 編譯 TypeScript
-npm run compile
+npm run start
 ```
 
-### 步驟 3: 執行測試
-
-#### 3.1 Shell 自動化測試
+健康檢查：
 
 ```bash
-# 回到根目錄
-cd /Users/wangshihya/agent-alike_based_PO_bot
-
-# 執行基本診斷測試
-./test_diagnostic_qa.sh
-
-# 執行強化場景測試
-./test_enhanced_scenarios.sh
+curl -s http://127.0.0.1:3000/health
 ```
 
-#### 3.2 VS Code 內建測試
+目前回應格式為（示意）：
 
-1. 在 VS Code 中按 `Cmd+Shift+P` (macOS) 或 `Ctrl+Shift+P` (Windows/Linux)
-2. 搜尋並執行 "PO Bot: Self-test"
-3. 查看輸出窗口中的測試結果
-
-## 📋 測試問題與預期
-
-### 當前測試問題
-**問題：** "簡單介紹線性代數"
-
-### 預期 LLM 回應內容
-- 包含 "線性代數" 關鍵字
-- 可能包含：向量、矩陣、線性變換等概念
-- 回應長度超過 10 字符
-- 具有教育性和解釋性內容
-
-### 驗證邏輯
-系統會檢查 LLM 回應是否包含以下關鍵字：
-- "線性代數"
-- "向量" 
-- "矩陣"
-- "線性"
-- "數學"
-- "代數"
-
-## 🔧 系統配置
-
-### Orchestrator 配置 (.env)
-```
-DRY_RUN=false          # 必須為 false 才能實際調用 LLM
-ORCHESTRATOR_PORT=3000
-LOG_LEVEL=info
-MCP_CONFIG_PATH=./mcp_config.json
-TICKET_STORE_TYPE=memory
-```
-
-### MCP 配置 (mcp_config.json)
-包含 LLM 工具配置：
 ```json
-"llm": {
-  "endpoint": "http://localhost:3006/mcp",
-  "description": "LLM service for text generation",
-  "tools": ["llm.generate", "llm.chat", "llm.embed"]
-}
+{ "status": "ok", "version": "v3-final" }
 ```
 
-### VS Code Extension 配置
-```json
-{
-  "orchestrator.baseUrl": "http://localhost:3000",
-  "worker.pollIntervalMs": 5000,
-  "worker.concurrency": 2
-}
-```
+### 2.2 編譯 VS Code Extension（會自動複製 YAML）
 
-## 📊 測試流程說明
-
-### 1. 基本診斷測試 (test_diagnostic_qa.sh)
-
-**執行流程：**
-1. 檢查 Orchestrator 服務健康狀態
-2. 提交 `diagnostic_qa` 事件到 `/events` 端點
-3. 輪詢 `/ticket/{ticket_id}` 檢查處理狀態
-4. 驗證回應內容是否符合預期
-
-**日誌示例：**
-```
-🤖 PO Bot Q&A 診斷自動化驗收
-==================================
-ℹ️  檢查 Orchestrator 服務狀態...
-✅ Orchestrator 狀態: healthy, dry_run: false
-ℹ️  提交診斷事件 (ID: diagnostic-qa-...)...
-✅ 事件已提交，票據 ID: xxx-xxx-xxx
-ℹ️  等待 Extension 處理票據 (最長等待 30s)...
-✅ 處理完成: "線性代數是數學的一個分支..."
-🎉 診斷測試通過！
-```
-
-### 2. 強化場景測試 (test_enhanced_scenarios.sh)
-
-包含 5 種測試情境：
-1. **長度限制測試** - 驗證 max_chars=30 限制
-2. **格式測試** - 驗證日期格式 (yyyy-mm-dd)
-3. **記憶注入測試** - 測試上下文記憶功能
-4. **空佇列測試** - 驗證輪詢間隔調整
-5. **診斷測試** - 線性代數介紹驗證
-
-### 3. VS Code 自我測試
-
-**執行步驟：**
-1. 提交診斷事件到 Orchestrator
-2. 等待 LLM 處理 (最長 30 秒)
-3. 驗證回應包含線性代數相關內容
-4. 顯示通過/失敗結果
-
-## 🔍 故障排除
-
-### 常見問題與解決方案
-
-#### 1. Orchestrator 無法啟動
 ```bash
-# 檢查端口占用
-lsof -i :3000
-
-# 檢查日誌
-tail -f orchestrator/logs/orchestrator.log
-```
-
-#### 2. LLM 工具不可用
-```bash
-# 檢查 MCP 配置
-cat orchestrator/mcp_config.json | grep -A 10 "llm"
-
-# 確認 LLM 服務運行狀態
-curl -s http://localhost:3006/mcp/tools
-```
-
-#### 3. VS Code Extension 錯誤
-```bash
-# 重新編譯
 cd vscode-extension
-rm -rf out/
+npm install
 npm run compile
-
-# 重啟 TypeScript 服務
-# 在 VS Code 中：Cmd+Shift+P → "TypeScript: Restart TS Server"
 ```
 
-#### 4. 測試逾時
+說明：
+- `npm run compile` 會先執行 `copy-prompts`，把 `src/prompts/*.yaml` 複製到 `out/prompts` 與 `out/src/prompts`，以符合執行期的路徑解析。
+
+### 2.3 啟動 Extension（F5）
+
+1. 在 VS Code 開啟本 repo。
+2. 進入 Run and Debug。
+3. 按 `F5` 啟動 Extension Host。
+4. Extension 啟動後會自動開始輪詢票據並處理（activation event: `onStartupFinished`）。
+
+---
+
+## 3. 基本操作：送入資料、觀測結果
+
+### 3.1 送入單筆事件（/events）
+
+你可以直接用 API 把一段文本送進系統，形成 TRIAGE 票據：
+
 ```bash
-# 檢查票據狀態
-curl -s http://localhost:3000/ticket/{ticket_id}
-
-# 檢查佇列深度
-curl -s http://localhost:3000/health | grep queue_depth
+curl -s http://127.0.0.1:3000/events \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "type": "triage_candidate",
+    "event_id": "manual-1",
+    "thread_id": "thread-manual-1",
+    "content": "請針對這段貼文做 triage：……",
+    "actor": "manual",
+    "timestamp": "2025-12-15T00:00:00Z",
+    "features": { "engagement": { "likes": 100, "comments": 50 } }
+  }'
 ```
 
-## 📈 性能監控
+Orchestrator 會回傳：
 
-### 關鍵指標
-- **回應時間**: LLM 處理單個請求的時間
-- **佇列深度**: 待處理票據數量
-- **成功率**: 測試通過率
-- **錯誤率**: 處理失敗的票據比例
+```json
+{ "status": "queued", "ticket_id": "..." }
+```
 
-### 監控命令
+注意：Orchestrator 內建 TriageFilter，會根據內容長度與互動數（likes/comments）決定是否跳過。
+
+### 3.2 批次攝入（推薦使用 ingest script）
+
+Orchestrator 內建 `ingest/run_ingest.js`，會把來源資料映射成 CandidateLite 並批次送入 `/v1/triage/batch`：
+
 ```bash
-# 即時監控服務狀態
-watch -n 2 "curl -s http://localhost:3000/health"
+cd orchestrator
 
-# 查看最近的票據
-curl -s "http://localhost:3000/tickets?limit=10"
+# 以 sample 檔案導入
+npm run ingest:sample
 
-# 檢查錯誤日誌
-tail -f orchestrator/logs/orchestrator.log | grep ERROR
+# 以自訂檔案導入
+FILE=ingest/sample_posts.json npm run ingest:file
 ```
 
-## 🎉 成功標準
+---
 
-### 測試通過標準
-1. ✅ Orchestrator 服務健康運行
-2. ✅ 診斷事件成功提交
-3. ✅ LLM 成功生成回應
-4. ✅ 回應內容包含線性代數相關概念
-5. ✅ 整個流程在 30 秒內完成
+## 4. 監控與驗證
 
-### 預期輸出示例
-```
-📄 Draft: "線性代數是數學的一個重要分支，主要研究向量空間和線性映射。它包括向量、矩陣、線性方程組等核心概念..."
-🎯 Confidence: 0.95
-🎉 Self-test PASSED! Response contains linear algebra content.
+### 4.1 看整體處理進度（/metrics）
+
+```bash
+curl -s http://127.0.0.1:3000/metrics | jq
 ```
 
-這個系統現在已準備好處理各種 PO 工作流程和智能問答任務！🚀
+此端點會回傳票據總數、pending/completed/failed、success rate，以及 reply 的專項統計。
+
+### 4.2 列出票據（/v1/tickets）
+
+```bash
+curl -s 'http://127.0.0.1:3000/v1/tickets?limit=50' | jq
+```
+
+重要欄位：
+- `status`: `pending` / `leased` / `completed`
+- `metadata.final_outputs`: Worker 回填的結構化結果
+  - TRIAGE：包含 `decision`, `target_prompt_id`, `reply_strategy`, `information_needs` 等
+  - REPLY：包含 `reply`, `used_strategy`, `process_trace` 等
+
+如果你要找單一 ticket，可用 `jq` 篩選（示意）：
+
+```bash
+TID='你的 ticket_id'
+curl -s 'http://127.0.0.1:3000/v1/tickets?limit=500' \
+  | jq --arg TID "$TID" '.[] | select(.id==$TID)'
+```
+
+### 4.3 審計輸出（logs/*.jsonl）
+
+Orchestrator 會在回填時（fill）寫審計檔：
+- `orchestrator/logs/triage_decisions.jsonl`
+- `orchestrator/logs/reply_results.jsonl`
+
+---
+
+## 5. VS Code Extension 自我測試（目前狀態說明）
+
+Extension 提供命令：`PO Bot: Self-test`（命令 ID：`agent-po-bot.selfTest`）。
+
+目前 self-test 會：
+1. 送出一筆 `diagnostic_qa` 事件到 `/events`。
+2. 嘗試輪詢 `/ticket/{ticket_id}` 取得結果並驗證答案。
+
+但請注意：以目前 Orchestrator 程式碼狀態，**尚未提供 `/ticket/:id` 這個查詢端點**，因此 self-test 可能無法完成輪詢驗證。
+
+建議改用本文件「4.2 列出票據」的方法，以 `/v1/tickets` + `jq` 查詢 `metadata.final_outputs` 來確認 Worker 是否成功回填。
+
+---
+
+## 6. 常見故障排除
+
+### 6.1 `prompts directory not found`
+
+症狀：Extension log 出現 PromptBuilder 找不到 prompts 目錄。
+
+處理：
+1. 重新編譯：
+   ```bash
+   cd vscode-extension
+   npm run compile
+   ```
+2. 確認下列任一目錄存在 YAML：
+   - `vscode-extension/out/src/prompts`
+   - `vscode-extension/out/prompts`
+3. 若你有自訂路徑，可設定環境變數 `POB_PROMPTS_DIR` 指向 prompts 目錄。
+
+### 6.2 VS Code 無可用聊天模型（No chat models available）
+
+症狀：Extension log 顯示找不到任何 chat models。
+
+處理：
+- 確認已啟用/登入可用的 Chat 模型提供者（例如 Copilot）。
+- 檢查設定 `agent-alike-po-bot.model.preferred` 是否對應到可用的 model id/name/family。
+
+### 6.3 Orchestrator 有票但 Worker 不領
+
+檢查點：
+- Worker 只會 lease `metadata.kind` 符合的票（`TRIAGE` / `REPLY`）。
+- 你可以用 `/v1/tickets?status=pending`（若有支援）或 `/v1/tickets?limit=...` 檢查 pending 票據是否帶有正確的 `metadata.kind`。

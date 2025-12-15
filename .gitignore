@@ -32,13 +32,17 @@ build/
 logs/
 **/logs/
 **/*.jsonl
-**/audit/
 **/backups/
 **/reply_results.jsonl
 **/triage_decisions.jsonl
 **/reply_audit.jsonl
 **/triage_audit.jsonl
 **/reply_watermark.json
+
+# VS Code extension build outputs
+vscode-extension/out/
+vscode-extension/src.zip
+vscode-extension/*.vsix
 
 # Orchestrator temp and generated data
 orchestrator/backups/

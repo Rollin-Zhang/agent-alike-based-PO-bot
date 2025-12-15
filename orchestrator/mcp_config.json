@@ -5,7 +5,7 @@
       "description": "Threads provider for fetching thread content and posting replies",
       "tools": [
         "threads.fetch_thread",
-        "threads.list_notifications", 
+        "threads.list_notifications",
         "threads.post_reply",
         "threads.get_thread_history"
       ],
@@ -31,7 +31,7 @@
       "timeout": 10
     },
     "guard": {
-      "endpoint": "http://localhost:3003/mcp", 
+      "endpoint": "http://localhost:3003/mcp",
       "description": "Guardrails service for content safety and policy checking",
       "tools": [
         "guard.check_content",
@@ -59,25 +59,31 @@
       "timeout": 15
     },
     "notebooklm": {
-      "endpoint": "http://localhost:3005/mcp",
-      "description": "NotebookLM MCP for RAG and knowledge retrieval",
-      "tools": [
-        "nb.navigate",
-        "nb.chat_with_notebook",
-        "nb.search_notebooks"
+      "command": "node", 
+      "args": [
+        "/Users/wangshihya/agent-alike_based_PO_bot/tools/notebooklm-mcp/dist/index.js"
       ],
-      "rate_limits": {
-        "requests_per_minute": 20,
-        "burst": 3
+      "description": "NotebookLM MCP (Local Fixed Version)",
+      "tools": [
+        "list_notebooks",
+        "add_notebook",
+        "ask_question"
+      ],
+      "env": {
+        "HEADLESS": "true"
       },
-      "timeout": 60,
+      "rate_limits": {
+        "requests_per_minute": 10,
+        "burst": 2
+      },
+      "timeout": 120,
       "optional": true
     }
   },
   "tool_whitelist": [
     "threads.fetch_thread",
     "threads.list_notifications",
-    "threads.post_reply", 
+    "threads.post_reply",
     "threads.get_thread_history",
     "mem.search",
     "mem.write",
@@ -89,9 +95,9 @@
     "reply.send",
     "reply.schedule",
     "reply.cancel",
-    "nb.navigate",
-    "nb.chat_with_notebook",
-    "nb.search_notebooks"
+    "list_notebooks",
+    "add_notebook",
+    "query_notebook"
   ],
   "fallback_behavior": {
     "on_tool_unavailable": "skip_node",

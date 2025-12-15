@@ -9,8 +9,17 @@ let ticketPanel: TicketPanel | undefined;
 let logger: Logger | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
+    // 👇👇👇【絕對路徑探針 & 時間戳記】👇👇👇
+    // 這兩行是我們驗證「到底跑的是哪一版程式」的鐵證
+    console.log('📍 [LOCATION PROBE] This code is running from:', __filename);
+    console.log('⏰ [TIME PROBE] Compile Time Check:', new Date().toISOString());
+    // 👆👆👆 只要看到這兩行，真相就大白了 👆👆👆
+
     // 初始化日誌
     logger = new Logger();
+    
+    // [DEBUG] 版本標記，確認 Log 是否來自最新版
+    logger.info('🔥🔥🔥 V3-LOCATION-CHECK: Extension Activated! 🔥🔥🔥');
     
     // 記錄啟動信息
     const config = vscode.workspace.getConfiguration('agent-alike-po-bot');
@@ -24,7 +33,7 @@ export function activate(context: vscode.ExtensionContext) {
         timestamp: new Date().toISOString()
     };
     
-    logger.info('🚀 Agent-alike PO Bot extension activated', hostInfo);
+    logger.info('Extension host info', hostInfo);
 
     // 初始化票據面板
     ticketPanel = new TicketPanel(context, logger);
@@ -62,6 +71,8 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.registerTreeDataProvider('agent-po-bot.tickets', ticketPanel);
 
     // 啟動背景工作器
+    // [DEBUG] 確保這裡有被執行
+    console.log('🔄 [EXTENSION] Starting TicketWorker...');
     ticketWorker.start();
 
     // 清理註冊
