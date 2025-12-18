@@ -15,6 +15,7 @@
       },
       "timeout": 30
     },
+
     "mem": {
       "endpoint": "http://localhost:3002/mcp",
       "description": "Memory service for semantic search and storage",
@@ -30,6 +31,7 @@
       },
       "timeout": 10
     },
+
     "guard": {
       "endpoint": "http://localhost:3003/mcp",
       "description": "Guardrails service for content safety and policy checking",
@@ -44,6 +46,7 @@
       },
       "timeout": 5
     },
+
     "reply": {
       "endpoint": "http://localhost:3004/mcp",
       "description": "Reply service for posting responses",
@@ -58,15 +61,21 @@
       },
       "timeout": 15
     },
+
     "notebooklm": {
-      "command": "node", 
+      "command": "node",
       "args": [
         "/Users/wangshihya/agent-alike_based_PO_bot/tools/notebooklm-mcp/dist/index.js"
       ],
       "description": "NotebookLM MCP (Local Fixed Version)",
       "tools": [
+        "get_health",
+        "setup_auth",
+        "re_auth",
         "list_notebooks",
         "add_notebook",
+        "select_notebook",
+        "search_notebooks",
         "ask_question"
       ],
       "env": {
@@ -77,28 +86,39 @@
         "burst": 2
       },
       "timeout": 120,
-      "optional": true
+      "optional": false
     }
   },
+
   "tool_whitelist": [
     "threads.fetch_thread",
     "threads.list_notifications",
     "threads.post_reply",
     "threads.get_thread_history",
+
     "mem.search",
     "mem.write",
     "mem.get",
     "mem.delete",
+
     "guard.check_content",
     "guard.check_policy",
     "guard.classify_risk",
+
     "reply.send",
     "reply.schedule",
     "reply.cancel",
+
+    "get_health",
+    "setup_auth",
+    "re_auth",
     "list_notebooks",
     "add_notebook",
-    "query_notebook"
+    "select_notebook",
+    "search_notebooks",
+    "ask_question"
   ],
+
   "fallback_behavior": {
     "on_tool_unavailable": "skip_node",
     "on_server_timeout": "retry_once",

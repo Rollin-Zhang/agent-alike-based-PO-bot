@@ -9,6 +9,7 @@ const { v4: uuidv4 } = require('uuid');
 const TicketStore = require('./store/TicketStore');
 const ToolGateway = require('./tool_gateway/ToolGateway');
 const mcpConfig = require('./mcp_config.json');
+const { resolveRuntimeEnv } = require('./shared/constants');
 
 // --- [CONFIG] 日誌開關 ---
 const ENABLE_AUDIT_LOGS = process.env.ENABLE_AUDIT_LOGS !== 'false';
@@ -100,6 +101,17 @@ class Orchestrator {
     this.app.listen(this.port, () => {
       logger.info(`Orchestrator running at http://localhost:${this.port}`);
       logger.info(`Mode: Sync-Strategic | Triage Filter: Enabled | Audit: ${ENABLE_AUDIT_LOGS}`);
+      
+      // [Commit 1] Log resolved environment variables (planned architecture keys)
+      const runtimeEnv = resolveRuntimeEnv();
+      logger.info('[Environment] Resolved configuration for planned architecture keys:', {
+        enableToolDerivation: runtimeEnv.enableToolDerivation,
+        toolOnlyMode: runtimeEnv.toolOnlyMode,
+        orchRoot: runtimeEnv.orchRoot,
+        memoryFilePath: runtimeEnv.memoryFilePath,
+        enableTicketSchemaValidation: runtimeEnv.enableTicketSchemaValidation,
+        note: 'Using defaults where env vars not set'
+      });
     });
   }
 
