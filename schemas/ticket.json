@@ -102,9 +102,150 @@
         "assigned_to": {
           "type": "string",
           "description": "Worker assigned to this ticket"
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["TRIAGE", "REPLY", "TOOL"],
+          "description": "Workflow stage marker (optional, for new three-phase flow)"
+        },
+        "tool_input": {
+          "$ref": "#/definitions/ToolInput",
+          "description": "Input configuration for TOOL ticket (only applicable when kind=TOOL)"
+        },
+        "final_outputs": {
+          "type": "object",
+          "properties": {
+            "tool_context": {
+              "$ref": "#/definitions/ToolContext",
+              "description": "Evidence package from tool execution"
+            },
+            "tool_verdict": {
+              "$ref": "#/definitions/ToolVerdict",
+              "description": "Three-state decision from TOOL phase"
+            }
+          },
+          "additionalProperties": true,
+          "description": "Output container for TOOL ticket results"
         }
-      }
+      },
+      "additionalProperties": true
     }
   },
-  "required": ["id", "type", "status", "event", "metadata"]
+  "required": ["id", "type", "status", "event", "metadata"],
+  "definitions": {
+    "ToolInput": {
+      "type": "object",
+      "description": "Input configuration for TOOL ticket (all fields optional)",
+      "properties": {
+        "event": {
+          "type": "object",
+          "description": "Original event inherited from source TRIAGE ticket"
+        },
+        "triage": {
+          "type": "object",
+          "description": "Complete decision object from TRIAGE worker (includes decision/information_needs)"
+        },
+        "tool_policy": {
+          "type": "object",
+          "properties": {
+            "max_turns": {
+              "type": "integer",
+              "description": "Maximum tool interaction rounds"
+            },
+            "web_search_strategy": {
+              "type": "string",
+              "description": "Strategy for web search (e.g., focused, broad)"
+            },
+            "web_search_budget": {
+              "type": "integer",
+              "description": "Maximum number of web search queries"
+            },
+            "tool_whitelist": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Allowed tool names for this ticket"
+            }
+          },
+          "additionalProperties": true,
+          "description": "Tool invocation policy constraints"
+        }
+      },
+      "additionalProperties": true
+    },
+    "ToolContext": {
+      "type": "object",
+      "description": "Evidence package from tool execution (all fields optional)",
+      "properties": {
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "source": { "type": "string" },
+              "snippet": { "type": "string" },
+              "relevance_score": { "type": "number" }
+            }
+          },
+          "description": "Collected evidence snippets"
+        },
+        "logs_hits": {
+          "type": "array",
+          "items": { "type": "object" },
+          "description": "Log search results"
+        },
+        "graph_nodes": {
+          "type": "array",
+          "items": { "type": "object" },
+          "description": "Knowledge graph query results"
+        },
+        "web_summaries": {
+          "type": "array",
+          "items": { "type": "object" },
+          "description": "Web search summaries"
+        },
+        "tool_trace": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "tool_name": { "type": "string" },
+              "args": { "type": "object" },
+              "result": { "type": "object" },
+              "timestamp": { "type": "string" }
+            }
+          },
+          "description": "Audit trail of tool invocations"
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "Whether evidence was truncated due to budget limits"
+        },
+        "turn_control": {
+          "type": "object",
+          "properties": {
+            "turns_used": { "type": "integer" },
+            "max_turns": { "type": "integer" }
+          },
+          "description": "Tool interaction turn tracking"
+        }
+      },
+      "additionalProperties": true
+    },
+    "ToolVerdict": {
+      "type": "object",
+      "description": "Three-state decision from TOOL phase",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["PROCEED", "DEFER", "BLOCK"],
+          "description": "Decision status: PROCEED (continue to REPLY), DEFER (needs human review), BLOCK (reject)"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Explanation for the verdict decision"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
 }
