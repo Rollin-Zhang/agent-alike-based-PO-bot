@@ -1,6 +1,8 @@
 class TicketStore {
-  constructor() {
+  constructor(dataPath = null) {
     this.tickets = new Map();
+    // Support custom data path for testing (TICKETSTORE_PATH env or parameter)
+    this.dataPath = dataPath || process.env.TICKETSTORE_PATH || null;
     // 移除 queue，改用 Map 遍歷篩選，以支援 kind 過濾
   }
   

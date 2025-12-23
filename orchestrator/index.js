@@ -8,11 +8,71 @@ const { v4: uuidv4 } = require('uuid');
 
 const TicketStore = require('./store/TicketStore');
 const ToolGateway = require('./tool_gateway/ToolGateway');
-const mcpConfig = require('./mcp_config.json');
 const { resolveRuntimeEnv } = require('./shared/constants');
+const deriveToolTicketFromTriage = require('./lib/deriveToolTicketFromTriage');
+const { readDerived } = require('./lib/derivedCompat');
+
+// --- [CONFIG] NO_MCP Boot Mode ---
+// When NO_MCP=true, server runs without MCP connections (test mode)
+const NO_MCP = process.env.NO_MCP === 'true';
+const mcpConfig = NO_MCP 
+  ? { mcp_servers: {}, tool_whitelist: [] } 
+  : (() => {
+      try {
+        return require('./mcp_config.json');
+      } catch (err) {
+        console.error('[FATAL] Failed to load mcp_config.json:', err.message);
+        process.exit(1);
+      }
+    })();
 
 // --- [CONFIG] 日誌開關 ---
 const ENABLE_AUDIT_LOGS = process.env.ENABLE_AUDIT_LOGS !== 'false';
+
+// --- [CONFIG] MCP Path Resolution Helper ---
+/**
+ * Resolve MCP server entrypoint paths relative to repo root.
+ * This ensures spawning works regardless of process.cwd().
+ */
+function resolveMCPPaths(config) {
+  // Skip path resolution in NO_MCP mode
+  if (NO_MCP) {
+    return config;
+  }
+  // Repo root is one level up from orchestrator/
+  const repoRoot = path.resolve(__dirname, '..');
+  const servers = config.mcp_servers || {};
+
+  for (const [serverName, serverConfig] of Object.entries(servers)) {
+    // Only process node stdio servers with relative paths
+    if (serverConfig.command === 'node' && 
+        serverConfig.args && 
+        serverConfig.args.length > 0) {
+      
+      const entrypoint = serverConfig.args[0];
+      
+      // Target web_search specifically for this commit
+      if (serverName === 'web_search' && 
+          !path.isAbsolute(entrypoint)) {
+        
+        const resolvedPath = path.resolve(repoRoot, entrypoint);
+        const exists = fs.existsSync(resolvedPath);
+        
+        console.log(`[mcp] resolve ${serverName} entrypoint path=${resolvedPath} exists=${exists}`);
+        
+        // Fail-fast if path doesn't exist
+        if (!exists) {
+          throw new Error(`MCP ${serverName} entrypoint not found: ${resolvedPath}`);
+        }
+        
+        // Update args with resolved absolute path
+        serverConfig.args[0] = resolvedPath;
+      }
+    }
+  }
+  
+  return config;
+}
 
 // --- 1. 輕量級 Logger ---
 const logger = {
@@ -80,8 +140,12 @@ class Orchestrator {
     this.app = express();
     this.port = process.env.ORCHESTRATOR_PORT || 3000;
     
-    this.ticketStore = new TicketStore();
-    this.toolGateway = new ToolGateway(logger, mcpConfig);
+    // Support custom TicketStore path for testing
+    const storePath = process.env.TICKETSTORE_PATH || null;
+    this.ticketStore = new TicketStore(storePath);
+    // Resolve MCP paths before initializing ToolGateway
+    const resolvedConfig = resolveMCPPaths(mcpConfig);
+    this.toolGateway = new ToolGateway(logger, resolvedConfig);
     this.filter = new TriageFilter();
     
     if (ENABLE_AUDIT_LOGS) {
@@ -91,7 +155,10 @@ class Orchestrator {
   }
 
   async start() {
-    await this.toolGateway.initialize();
+    // Only initialize ToolGateway in normal mode
+    if (!NO_MCP) {
+      await this.toolGateway.initialize();
+    }
 
     this.app.use(cors());
     this.app.use(bodyParser.json({ limit: '10mb' }));
@@ -100,7 +167,7 @@ class Orchestrator {
 
     this.app.listen(this.port, () => {
       logger.info(`Orchestrator running at http://localhost:${this.port}`);
-      logger.info(`Mode: Sync-Strategic | Triage Filter: Enabled | Audit: ${ENABLE_AUDIT_LOGS}`);
+      logger.info(`Mode: ${NO_MCP ? 'NO_MCP (Test)' : 'Sync-Strategic'} | Triage Filter: Enabled | Audit: ${ENABLE_AUDIT_LOGS}`);
       
       // [Commit 1] Log resolved environment variables (planned architecture keys)
       const runtimeEnv = resolveRuntimeEnv();
@@ -205,6 +272,33 @@ class Orchestrator {
       }
     });
 
+    this.app.get('/v1/tickets/:id', async (req, res) => {
+      const { id } = req.params;
+      try {
+        const ticket = await this.ticketStore.get(id);
+        if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+        
+        // Return ticket with all metadata, using compat helper for derived field
+        res.json({
+          id: ticket.id,
+          ticket_id: ticket.ticket_id,
+          status: ticket.status,
+          type: ticket.type,
+          flow_id: ticket.flow_id,
+          metadata: ticket.metadata,
+          payload: ticket.payload,
+          outputs: ticket.outputs,
+          event: ticket.event,
+          derived: readDerived(ticket) || null,  // Use compat helper with fallback
+          created_at: ticket.created_at,
+          completed_at: ticket.completed_at
+        });
+      } catch (e) {
+        logger.error('Failed to get ticket', e);
+        res.status(500).json({ error: e.message });
+      }
+    });
+
     this.app.post('/v1/tickets/:id/fill', async (req, res) => {
       const { id } = req.params;
       const { outputs, by } = req.body;
@@ -212,6 +306,9 @@ class Orchestrator {
       try {
         const ticket = await this.ticketStore.get(id);
         if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+
+        // --- TRIAGE→TOOL Derivation (Block A) ---
+        await deriveToolTicketFromTriage(ticket, outputs, this.ticketStore);
 
         await this.ticketStore.complete(id, outputs, by);
         res.json({ status: 'ok' });
