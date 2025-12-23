@@ -11,6 +11,7 @@ async function runTests() {
     ...Object.values(require('./no_scattered_derived_access.test')),
     // Unit tests (pure logic, no HTTP)
     ...Object.values(require('./derive_triage_tool.test')),
+    ...Object.values(require('./derive_tool_reply.test')),
     // Derived compat layer tests
     ...Object.values(require('./derived_compat.test')),
     // Legacy reply template builder tests (Commit 6B.1)
