@@ -528,6 +528,14 @@ class TicketProcessor {
     return { status: 'drafted' };
   }
 
+  /* === TOOL FLOW === */
+  private async runTool(ticket: any): Promise<any> {
+    return {
+      tool_context: { evidence: {}, tool_trace: [] },
+      tool_verdict: { status: "DEFER", reason: "stub" }
+    };
+  }
+
   /* === Helpers === */
 
   private getTicketId(): string {
