@@ -66,6 +66,18 @@ const MAX_HITS_PER_TOOL = 50;
 const MAX_CHARS_PER_HIT = 200;
 
 /**
+ * Multiplier for read operations (read_file returns full content vs. search hit excerpts).
+ * NOTE: This is a temporary scalar. Commit 11 will replace with empirical tuning.
+ */
+const READ_MULTIPLIER = 10;
+
+/**
+ * Maximum characters to read from a single file via fsRead.
+ * Derived from MAX_CHARS_PER_HIT to maintain proportional limits.
+ */
+const MAX_READ_CHARS = MAX_CHARS_PER_HIT * READ_MULTIPLIER;
+
+/**
  * Maximum total characters for all evidence combined.
  */
 const MAX_TOTAL_EVIDENCE_CHARS = 30000;
@@ -122,6 +134,8 @@ module.exports = {
   resolveRuntimeEnv,
   MAX_HITS_PER_TOOL,
   MAX_CHARS_PER_HIT,
+  READ_MULTIPLIER,
+  MAX_READ_CHARS,
   MAX_TOTAL_EVIDENCE_CHARS,
   QUICK_SEARCH_TIMEOUT_MS,
   ALLOWED_FS_PATHS,

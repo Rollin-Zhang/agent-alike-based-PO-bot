@@ -55,6 +55,18 @@ export const MAX_HITS_PER_TOOL: 50;
 export const MAX_CHARS_PER_HIT: 200;
 
 /**
+ * Multiplier for read operations (read_file returns full content vs. search hit excerpts).
+ * NOTE: This is a temporary scalar. Commit 11 will replace with empirical tuning.
+ */
+export const READ_MULTIPLIER: 10;
+
+/**
+ * Maximum characters to read from a single file via fsRead.
+ * Derived from MAX_CHARS_PER_HIT to maintain proportional limits.
+ */
+export const MAX_READ_CHARS: number;
+
+/**
  * Maximum total characters for all evidence combined.
  */
 export const MAX_TOTAL_EVIDENCE_CHARS: 30000;
