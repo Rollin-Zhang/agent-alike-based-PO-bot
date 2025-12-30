@@ -139,44 +139,10 @@ function escapeGlobLiteral(query: string): string {
 }
 
 // ============================================================================
-// MCP CallToolResult UNPACKING (Locked spec from MCP protocol)
+// MCP CallToolResult UNPACKING (Shared utility from mcpUtils)
 // ============================================================================
 
-/**
- * Extracts text content from MCP CallToolResult.
- * 
- * CallToolResult structure:
- * {
- *   content: ContentBlock[],
- *   isError?: boolean
- * }
- * 
- * ContentBlock can be:
- * - { type: "text", text: string }
- * - { type: "image", data: string, mimeType: string }
- * - { type: "resource", ... }
- * 
- * We only extract text blocks, ignore other types (no error thrown).
- * 
- * @param result - MCP CallToolResult
- * @returns Array of text strings from text blocks
- */
-function extractTextContent(result: any): string[] {
-  if (!result || !Array.isArray(result.content)) {
-    return [];
-  }
-  
-  const texts: string[] = [];
-  
-  for (const block of result.content) {
-    if (block && block.type === 'text' && typeof block.text === 'string') {
-      texts.push(block.text);
-    }
-    // Ignore non-text blocks (image, resource, etc.)
-  }
-  
-  return texts;
-}
+import { extractTextContent } from './mcpUtils';
 
 // ============================================================================
 // PUBLIC API (Fixed signatures)

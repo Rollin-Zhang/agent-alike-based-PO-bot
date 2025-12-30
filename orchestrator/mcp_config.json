@@ -87,6 +87,30 @@
       },
       "timeout": 120,
       "optional": false
+    },
+
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory@2025.8.4"],
+      "transport": "stdio",
+      "env": { "MEMORY_FILE_PATH": "./data/knowledge_graph.json" },
+      "description": "Official MCP memory server for knowledge graph operations",
+      "tools": [
+        "create_entities",
+        "create_relations",
+        "add_observations",
+        "delete_entities",
+        "delete_observations",
+        "delete_relations",
+        "read_graph",
+        "search_nodes",
+        "open_nodes"
+      ],
+      "rate_limits": {
+        "requests_per_minute": 100,
+        "burst": 20
+      },
+      "timeout": 30
     }
   },
 

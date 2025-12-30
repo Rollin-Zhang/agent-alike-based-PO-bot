@@ -99,30 +99,39 @@ const ALLOWED_FS_PATHS = Object.freeze(['./logs', './docs']);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Entity and Relation Type Definitions
+// NOTE: Probed from @modelcontextprotocol/server-memory@2025.8.4 (Commit 9b)
+// Server accepts any string; these are recommended types for consistency.
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Valid entity types for knowledge graph operations.
+ * Recommended entity types for knowledge graph operations.
+ * Lowercase to match common conventions (probed from official server).
  */
 const ENTITY_TYPES = Object.freeze([
-  'Person',
-  'Org',
-  'Event',
-  'Policy',
-  'Claim',
-  'Source'
+  'person',
+  'organization',
+  'event',
+  'policy',
+  'claim',
+  'source',
+  'location'
 ]);
 
 /**
- * Valid relation types for knowledge graph edges.
+ * Recommended relation types for knowledge graph edges.
+ * Based on common knowledge graph patterns.
  */
 const RELATION_TYPES = Object.freeze([
+  'works_at',
+  'located_in',
   'related_to',
   'claims',
   'supports',
   'opposes',
   'occurred_at',
-  'mentions'
+  'mentions',
+  'member_of',
+  'part_of'
 ]);
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -1,0 +1,46 @@
+{
+  "probe_timestamp": "2025-12-30T09:39:48.626Z",
+  "pinned_package": "@modelcontextprotocol/server-memory@2025.8.4",
+  "server_id": "memory",
+  "probe_command": "npx -y @modelcontextprotocol/server-memory@2025.8.4",
+  "content_types": [
+    "text"
+  ],
+  "tools_discovered": [
+    "create_entities",
+    "create_relations",
+    "add_observations",
+    "delete_entities",
+    "delete_observations",
+    "delete_relations",
+    "read_graph",
+    "search_nodes",
+    "open_nodes"
+  ],
+  "top_level_keys": [
+    "entities",
+    "relations"
+  ],
+  "unique_entity_types": [
+    "person",
+    "organization"
+  ],
+  "unique_relation_types": [
+    "works_at"
+  ],
+  "sample_entity": {
+    "type": "entity",
+    "name": "ProbeTestPerson",
+    "entityType": "person",
+    "observations": [
+      "Test observation for probe"
+    ]
+  },
+  "sample_relation": {
+    "type": "relation",
+    "from": "ProbeTestPerson",
+    "to": "ProbeTestOrg",
+    "relationType": "works_at"
+  },
+  "probe_status": "success"
+}

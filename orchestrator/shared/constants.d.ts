@@ -90,25 +90,32 @@ export const ALLOWED_FS_PATHS: readonly ['./logs', './docs'];
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Valid entity types for knowledge graph operations.
+ * Recommended entity types for knowledge graph operations.
+ * Lowercase to match common conventions (probed from official server).
  */
 export const ENTITY_TYPES: readonly [
-  'Person',
-  'Org',
-  'Event',
-  'Policy',
-  'Claim',
-  'Source'
+  'person',
+  'organization',
+  'event',
+  'policy',
+  'claim',
+  'source',
+  'location'
 ];
 
 /**
- * Valid relation types for knowledge graph edges.
+ * Recommended relation types for knowledge graph edges.
+ * Based on common knowledge graph patterns.
  */
 export const RELATION_TYPES: readonly [
+  'works_at',
+  'located_in',
   'related_to',
   'claims',
   'supports',
   'opposes',
   'occurred_at',
-  'mentions'
+  'mentions',
+  'member_of',
+  'part_of'
 ];
