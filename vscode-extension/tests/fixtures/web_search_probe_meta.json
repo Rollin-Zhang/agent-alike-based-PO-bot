@@ -1,0 +1,20 @@
+{
+  "probe_timestamp": "2025-12-30T10:30:25.857Z",
+  "pinned_package": "local:./tools/web-search-mcp-main",
+  "server_id": "web_search",
+  "probe_command": "node /Users/wangshihya/agent-alike_based_PO_bot/tools/web-search-mcp-main/dist/index.js",
+  "tools_discovered": [
+    "full-web-search",
+    "get-web-search-summaries",
+    "get-single-web-page-content"
+  ],
+  "summaries_content_types": [
+    "text"
+  ],
+  "summaries_content_count": 1,
+  "page_content_types": [
+    "text"
+  ],
+  "page_content_count": 1,
+  "probe_status": "success"
+}

@@ -111,6 +111,26 @@
         "burst": 20
       },
       "timeout": 30
+    },
+
+    "web_search": {
+      "command": "node",
+      "args": ["./tools/web-search-mcp-main/dist/index.js"],
+      "transport": "stdio",
+      "env": {
+        "MAX_CONTENT_LENGTH": "2000",
+        "DEFAULT_TIMEOUT": "6000"
+      },
+      "description": "Web search MCP server for summaries and page content",
+      "tools": [
+        "get-web-search-summaries",
+        "get-single-web-page-content"
+      ],
+      "rate_limits": {
+        "requests_per_minute": 30,
+        "burst": 5
+      },
+      "timeout": 30
     }
   },
 
@@ -140,8 +160,13 @@
     "add_notebook",
     "select_notebook",
     "search_notebooks",
-    "ask_question"
+    "ask_question",
+
+    "get-web-search-summaries",
+    "get-single-web-page-content"
   ],
+
+  "tool_whitelist_note": "ToolGateway.js currently runs in tolerant mode (it does not throw when a tool is not allowlisted). These entries are kept complete so switching to strict enforcement later won't break runtime.",
 
   "fallback_behavior": {
     "on_tool_unavailable": "skip_node",
