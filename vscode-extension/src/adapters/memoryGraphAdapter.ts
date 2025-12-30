@@ -15,7 +15,9 @@
  */
 
 import { extractTextContent, parseJsonFromResult } from './mcpUtils';
-import { ENTITY_TYPES, RELATION_TYPES } from '../../../orchestrator/shared/constants';
+
+import { ENTITY_TYPES, RELATION_TYPES } from '../shared/constants';
+import type { AdapterResult, Evidence, ToolTraceEntry } from '../shared/toolContext';
 
 // ============================================================================
 // TOOL CONTRACT LOCK (Pinned SSOT, hardcoded from @modelcontextprotocol/server-memory)
@@ -76,27 +78,7 @@ export interface GraphData {
   relations: Relation[];
 }
 
-export interface Evidence {
-  source: string;
-  content: string;
-  entity_type?: string;
-  relation_type?: string;
-}
-
-export interface ToolTraceEntry {
-  tool_name: string;
-  error?: string;
-  detail?: Record<string, any>;
-  timestamp?: string;
-}
-
-export interface AdapterResult {
-  evidence: Evidence[];
-  error?: string;
-  detail?: Record<string, any>;
-  tool_trace?: ToolTraceEntry[];
-  schema_warnings?: string[];
-}
+// NOTE: Evidence/AdapterResult/ToolTraceEntry are SSOT in src/shared/toolContext.ts
 
 // ============================================================================
 // TOOL WHITELIST ENFORCEMENT
@@ -262,13 +244,14 @@ function graphToEvidence(data: GraphData): Evidence[] {
   
   // Transform entities
   for (const entity of data.entities) {
-    const content = entity.observations.length > 0
+    const snippet = entity.observations.length > 0
       ? entity.observations.join('; ')
       : `[${entity.entityType}]`;
     
     evidence.push({
       source: `entity:${entity.name}`,
-      content,
+      snippet,
+      relevance_score: 0.6,
       entity_type: entity.entityType
     });
   }
@@ -277,7 +260,8 @@ function graphToEvidence(data: GraphData): Evidence[] {
   for (const relation of data.relations) {
     evidence.push({
       source: `relation:${relation.from}->${relation.to}`,
-      content: `${relation.from} ${relation.relationType} ${relation.to}`,
+      snippet: `${relation.from} ${relation.relationType} ${relation.to}`,
+      relevance_score: 0.55,
       relation_type: relation.relationType
     });
   }
@@ -344,16 +328,20 @@ export async function readGraph(mcp: McpClient): Promise<AdapterResult> {
       return {
         evidence,
         error: MEM_SCHEMA_DRIFT,
-        detail: { drop_rate: dropRate, dropped: normalized.dropped, total: normalized.total },
-        tool_trace,
-        schema_warnings: allWarnings.length > 0 ? allWarnings : undefined
+        detail: {
+          drop_rate: dropRate,
+          dropped: normalized.dropped,
+          total: normalized.total,
+          warnings: allWarnings.length > 0 ? allWarnings : undefined
+        },
+        tool_trace
       };
     }
 
     return {
       evidence,
       tool_trace,
-      schema_warnings: allWarnings.length > 0 ? allWarnings : undefined
+      detail: allWarnings.length > 0 ? { warnings: allWarnings } : undefined
     };
     
   } catch (err: any) {
@@ -434,16 +422,20 @@ export async function searchNodes(
       return {
         evidence,
         error: MEM_SCHEMA_DRIFT,
-        detail: { drop_rate: dropRate, dropped: normalized.dropped, total: normalized.total },
-        tool_trace,
-        schema_warnings: allWarnings.length > 0 ? allWarnings : undefined
+        detail: {
+          drop_rate: dropRate,
+          dropped: normalized.dropped,
+          total: normalized.total,
+          warnings: allWarnings.length > 0 ? allWarnings : undefined
+        },
+        tool_trace
       };
     }
 
     return {
       evidence,
       tool_trace,
-      schema_warnings: allWarnings.length > 0 ? allWarnings : undefined
+      detail: allWarnings.length > 0 ? { warnings: allWarnings } : undefined
     };
     
   } catch (err: any) {
@@ -524,16 +516,20 @@ export async function openNodes(
       return {
         evidence,
         error: MEM_SCHEMA_DRIFT,
-        detail: { drop_rate: dropRate, dropped: normalized.dropped, total: normalized.total },
-        tool_trace,
-        schema_warnings: allWarnings.length > 0 ? allWarnings : undefined
+        detail: {
+          drop_rate: dropRate,
+          dropped: normalized.dropped,
+          total: normalized.total,
+          warnings: allWarnings.length > 0 ? allWarnings : undefined
+        },
+        tool_trace
       };
     }
 
     return {
       evidence,
       tool_trace,
-      schema_warnings: allWarnings.length > 0 ? allWarnings : undefined
+      detail: allWarnings.length > 0 ? { warnings: allWarnings } : undefined
     };
     
   } catch (err: any) {

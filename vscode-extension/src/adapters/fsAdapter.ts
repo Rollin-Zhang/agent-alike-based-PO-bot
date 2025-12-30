@@ -17,7 +17,7 @@ import {
   MAX_HITS_PER_TOOL,
   MAX_CHARS_PER_HIT,
   MAX_READ_CHARS
-} from '../../../orchestrator/shared/constants';
+} from '../shared/constants';
 
 // ============================================================================
 // TOOL CONTRACT LOCK (Pinned SSOT, hardcoded from official MCP filesystem)
@@ -144,6 +144,8 @@ function escapeGlobLiteral(query: string): string {
 
 import { extractTextContent } from './mcpUtils';
 
+import type { AdapterResult, Evidence, ToolTraceEntry } from '../shared/toolContext';
+
 // ============================================================================
 // PUBLIC API (Fixed signatures)
 // ============================================================================
@@ -237,4 +239,95 @@ export async function fsSearch(mcp: any, { path, query }: { path: string; query:
   
   // Deterministic truncation: take first N hits
   return texts.slice(0, MAX_HITS_PER_TOOL);
+}
+
+// ============================================================================
+// ADAPTERRESULT WRAPPERS (Commit 11+)
+// ============================================================================
+
+function toFsErrorCode(err: unknown): string {
+  const msg = (err as any)?.message;
+  if (typeof msg === 'string' && msg === 'FS_PATH_BLOCKED') return 'FS_PATH_BLOCKED';
+  return 'FS_CALL_FAILED';
+}
+
+/**
+ * Reads a file and returns AdapterResult evidence.
+ */
+export async function fsReadResult(
+  mcp: any,
+  { path }: { path: string }
+): Promise<AdapterResult> {
+  const tool_trace: ToolTraceEntry[] = [];
+  const timestamp = new Date().toISOString();
+
+  try {
+    const content = await fsRead(mcp, { path });
+    const evidence: Evidence[] = [
+      {
+        source: `fs:${path}`,
+        snippet: content,
+        relevance_score: 0.7
+      }
+    ];
+
+    return { evidence, tool_trace };
+  } catch (err: any) {
+    const code = toFsErrorCode(err);
+    tool_trace.push({
+      tool_name: 'fs.read_file',
+      error: code,
+      detail: { path },
+      timestamp
+    });
+
+    return {
+      evidence: [],
+      error: code,
+      detail: { path, message: typeof err?.message === 'string' ? err.message : String(err) },
+      tool_trace
+    };
+  }
+}
+
+/**
+ * Searches files and returns AdapterResult evidence (snippets are file paths).
+ */
+export async function fsSearchResult(
+  mcp: any,
+  { path, query }: { path: string; query: string }
+): Promise<AdapterResult> {
+  const tool_trace: ToolTraceEntry[] = [];
+  const timestamp = new Date().toISOString();
+
+  try {
+    const hits = await fsSearch(mcp, { path, query });
+
+    const evidence: Evidence[] = hits.map((hit, index) => ({
+      source: `fs_hit:${hit}`,
+      snippet: hit,
+      relevance_score: Math.max(0.4, 0.6 - index * 0.01)
+    }));
+
+    return { evidence, tool_trace };
+  } catch (err: any) {
+    const code = toFsErrorCode(err);
+    tool_trace.push({
+      tool_name: 'fs.search_files',
+      error: code,
+      detail: { path, query },
+      timestamp
+    });
+
+    return {
+      evidence: [],
+      error: code,
+      detail: {
+        path,
+        query,
+        message: typeof err?.message === 'string' ? err.message : String(err)
+      },
+      tool_trace
+    };
+  }
 }
