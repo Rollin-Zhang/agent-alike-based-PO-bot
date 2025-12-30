@@ -17,7 +17,9 @@ async function runTests() {
     // Legacy reply template builder tests (Commit 6B.1)
     ...Object.values(require('./legacy_reply_template_builder.test')),
     // Integration tests (HTTP + NO_MCP)
-    ...Object.values(require('./http_fill_derivation.test'))
+    ...Object.values(require('./http_fill_derivation.test')),
+    // Commit 13: TRIAGE→TOOL E2E with idempotency proof
+    ...Object.values(require('./http_triage_tool_e2e.test'))
   ];
 
   let passed = 0;
