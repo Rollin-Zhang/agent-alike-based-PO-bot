@@ -1,5 +1,5 @@
 {
-  "probe_timestamp": "2025-12-30T09:39:48.626Z",
+  "probe_timestamp": "2025-12-30T09:57:22.242Z",
   "pinned_package": "@modelcontextprotocol/server-memory@2025.8.4",
   "server_id": "memory",
   "probe_command": "npx -y @modelcontextprotocol/server-memory@2025.8.4",

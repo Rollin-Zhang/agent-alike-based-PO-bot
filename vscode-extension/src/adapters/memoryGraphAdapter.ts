@@ -49,6 +49,10 @@ const MEM_SCHEMA_INVALID = "MEM_SCHEMA_INVALID";
 const MEM_SCHEMA_DRIFT = "MEM_SCHEMA_DRIFT";
 const MEM_ENTITY_TYPE_UNKNOWN = "MEM_ENTITY_TYPE_UNKNOWN";
 
+// Drift threshold: if more than 50% of items are dropped as invalid,
+// treat as schema drift (contract mismatch) rather than a few bad rows.
+const DRIFT_DROP_RATE_THRESHOLD = 0.5;
+
 // ============================================================================
 // TYPE DEFINITIONS
 // ============================================================================
@@ -178,14 +182,12 @@ function validateGraphSchema(data: any): { valid: boolean; warnings: string[] } 
     return { valid: false, warnings: [MEM_SCHEMA_INVALID] };
   }
   
-  // Check for expected top-level keys
+  // Top-level contract is strict: expected keys only.
+  // Any unexpected keys are treated as schema invalid (structure mismatch), not drift.
   const expectedKeys = new Set(['entities', 'relations']);
-  const actualKeys = new Set(Object.keys(data));
-  
-  // Detect schema drift (unexpected keys)
-  for (const key of actualKeys) {
+  for (const key of Object.keys(data)) {
     if (!expectedKeys.has(key)) {
-      warnings.push(`${MEM_SCHEMA_DRIFT}: unexpected key "${key}"`);
+      return { valid: false, warnings: [MEM_SCHEMA_INVALID] };
     }
   }
   
@@ -199,6 +201,53 @@ function validateGraphSchema(data: any): { valid: boolean; warnings: string[] } 
   }
   
   return { valid: true, warnings };
+}
+
+// ============================================================================
+// NORMALIZATION + DRIFT (Drop invalid rows, compute dropRate)
+// ============================================================================
+
+function normalizeGraphData(data: any): {
+  graph: GraphData;
+  dropped: number;
+  total: number;
+  warnings: string[];
+} {
+  const warnings: string[] = [];
+  const entities: Entity[] = [];
+  const relations: Relation[] = [];
+
+  let dropped = 0;
+  let total = 0;
+
+  for (const entity of data.entities) {
+    total += 1;
+    const validation = validateEntity(entity);
+    warnings.push(...validation.warnings);
+    if (!validation.valid) {
+      dropped += 1;
+      continue;
+    }
+    entities.push(entity);
+  }
+
+  for (const relation of data.relations) {
+    total += 1;
+    const validation = validateRelation(relation);
+    warnings.push(...validation.warnings);
+    if (!validation.valid) {
+      dropped += 1;
+      continue;
+    }
+    relations.push(relation);
+  }
+
+  return {
+    graph: { entities, relations },
+    dropped,
+    total,
+    warnings
+  };
 }
 
 // ============================================================================
@@ -285,22 +334,22 @@ export async function readGraph(mcp: McpClient): Promise<AdapterResult> {
         tool_trace
       };
     }
-    
-    // Validate individual entities and relations
-    const allWarnings: string[] = [...schemaValidation.warnings];
-    
-    for (const entity of data.entities) {
-      const { warnings } = validateEntity(entity);
-      allWarnings.push(...warnings);
+
+    const normalized = normalizeGraphData(data);
+    const allWarnings: string[] = [...schemaValidation.warnings, ...normalized.warnings];
+    const evidence = graphToEvidence(normalized.graph);
+
+    const dropRate = normalized.total > 0 ? normalized.dropped / normalized.total : 0;
+    if (normalized.total > 0 && dropRate > DRIFT_DROP_RATE_THRESHOLD) {
+      return {
+        evidence,
+        error: MEM_SCHEMA_DRIFT,
+        detail: { drop_rate: dropRate, dropped: normalized.dropped, total: normalized.total },
+        tool_trace,
+        schema_warnings: allWarnings.length > 0 ? allWarnings : undefined
+      };
     }
-    
-    for (const relation of data.relations) {
-      const { warnings } = validateRelation(relation);
-      allWarnings.push(...warnings);
-    }
-    
-    const evidence = graphToEvidence(data);
-    
+
     return {
       evidence,
       tool_trace,
@@ -375,21 +424,22 @@ export async function searchNodes(
         tool_trace
       };
     }
-    
-    const allWarnings: string[] = [...schemaValidation.warnings];
-    
-    for (const entity of data.entities) {
-      const { warnings } = validateEntity(entity);
-      allWarnings.push(...warnings);
+
+    const normalized = normalizeGraphData(data);
+    const allWarnings: string[] = [...schemaValidation.warnings, ...normalized.warnings];
+    const evidence = graphToEvidence(normalized.graph);
+
+    const dropRate = normalized.total > 0 ? normalized.dropped / normalized.total : 0;
+    if (normalized.total > 0 && dropRate > DRIFT_DROP_RATE_THRESHOLD) {
+      return {
+        evidence,
+        error: MEM_SCHEMA_DRIFT,
+        detail: { drop_rate: dropRate, dropped: normalized.dropped, total: normalized.total },
+        tool_trace,
+        schema_warnings: allWarnings.length > 0 ? allWarnings : undefined
+      };
     }
-    
-    for (const relation of data.relations) {
-      const { warnings } = validateRelation(relation);
-      allWarnings.push(...warnings);
-    }
-    
-    const evidence = graphToEvidence(data);
-    
+
     return {
       evidence,
       tool_trace,
@@ -464,21 +514,22 @@ export async function openNodes(
         tool_trace
       };
     }
-    
-    const allWarnings: string[] = [...schemaValidation.warnings];
-    
-    for (const entity of data.entities) {
-      const { warnings } = validateEntity(entity);
-      allWarnings.push(...warnings);
+
+    const normalized = normalizeGraphData(data);
+    const allWarnings: string[] = [...schemaValidation.warnings, ...normalized.warnings];
+    const evidence = graphToEvidence(normalized.graph);
+
+    const dropRate = normalized.total > 0 ? normalized.dropped / normalized.total : 0;
+    if (normalized.total > 0 && dropRate > DRIFT_DROP_RATE_THRESHOLD) {
+      return {
+        evidence,
+        error: MEM_SCHEMA_DRIFT,
+        detail: { drop_rate: dropRate, dropped: normalized.dropped, total: normalized.total },
+        tool_trace,
+        schema_warnings: allWarnings.length > 0 ? allWarnings : undefined
+      };
     }
-    
-    for (const relation of data.relations) {
-      const { warnings } = validateRelation(relation);
-      allWarnings.push(...warnings);
-    }
-    
-    const evidence = graphToEvidence(data);
-    
+
     return {
       evidence,
       tool_trace,

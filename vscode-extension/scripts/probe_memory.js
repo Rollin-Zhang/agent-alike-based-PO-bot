@@ -11,11 +11,23 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const readline = require('readline');
 
 const PINNED_PACKAGE = '@modelcontextprotocol/server-memory@2025.8.4';
-const FIXTURES_DIR = path.join(__dirname, '..', 'test', 'fixtures');
+// SSOT paths (Commit 9b)
+// - PROBE_SCRIPTS_DIR: vscode-extension/scripts/
+// - FIXTURES_DIR: vscode-extension/tests/fixtures/
+const FIXTURES_DIR = path.join(__dirname, '..', 'tests', 'fixtures');
 const OUTPUT_FILE = path.join(FIXTURES_DIR, 'memory_probe_result.json');
+
+// Use a temporary graph file to avoid polluting the real knowledge graph.
+// (Probe is for contract evidence, not production data mutation.)
+const REPO_ROOT = path.join(__dirname, '..', '..');
+const PROBE_GRAPH_FILE = path.join(
+  REPO_ROOT,
+  'orchestrator',
+  'data',
+  'knowledge_graph.probe.json'
+);
 
 // Ensure fixtures directory exists
 if (!fs.existsSync(FIXTURES_DIR)) {
@@ -57,7 +69,7 @@ async function probeMemoryServer() {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
       ...process.env,
-      MEMORY_FILE_PATH: path.join(__dirname, '..', 'data', 'probe_test_graph.json')
+      MEMORY_FILE_PATH: PROBE_GRAPH_FILE
     }
   });
 
@@ -210,6 +222,15 @@ async function probeMemoryServer() {
     
     // Wait for process to exit
     await new Promise(resolve => setTimeout(resolve, 500));
+
+    // Remove temporary graph file (best-effort)
+    try {
+      if (fs.existsSync(PROBE_GRAPH_FILE)) {
+        fs.unlinkSync(PROBE_GRAPH_FILE);
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
   }
 
   // Write result
