@@ -1,0 +1,29 @@
+{
+  "mcp_servers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory@2025.8.4"],
+      "transport": "stdio",
+      "env": { "MEMORY_FILE_PATH": "./data/probe_test_graph.json" },
+      "description": "Minimal memory server for probe tests",
+      "tools": [
+        "create_entities",
+        "create_relations",
+        "add_observations",
+        "delete_entities",
+        "delete_observations",
+        "delete_relations",
+        "read_graph",
+        "search_nodes",
+        "open_nodes"
+      ],
+      "timeout": 30
+    }
+  },
+  "tool_whitelist": [
+    "read_graph",
+    "search_nodes",
+    "open_nodes"
+  ],
+  "tool_whitelist_note": "Phase B probes: memory read-only, only allow read tools"
+}

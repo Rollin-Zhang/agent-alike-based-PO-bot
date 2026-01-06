@@ -115,6 +115,28 @@ $ curl -X POST http://localhost:3000/events -H "Content-Type: application/json" 
 # ✅ 事件提交與票據生成正常
 ```
 
+### ✅ Phase B（Real MCP）驗收：B1 / B2
+
+#### B1：`POST /v1/tools/execute` readiness gate + evidence
+```bash
+node orchestrator/scripts/e2e_phaseB1_tools_execute.js
+```
+
+Evidence：
+- `orchestrator/out/e2e_runs/<YYYY-MM-DD>/phaseB1/<run_id>/`
+- 最新一次（示例）：`orchestrator/out/e2e_runs/2026-01-05/phaseB1/phaseB1_mk1olvc0/summary.json`
+
+#### B2：事件觸發 → 自動 tool_steps → RunnerCore 執行 → TOOL writeback + evidence
+```bash
+node orchestrator/scripts/e2e_phaseB2_tool_pipeline.js
+```
+
+Evidence：
+- `orchestrator/out/e2e_runs/<YYYY-MM-DD>/phaseB2/<run_id>/`
+- 最新一次（示例）：`orchestrator/out/e2e_runs/2026-01-05/phaseB2/phaseB2_mk1om3qq/summary.json`
+
+補充：B2 runner 會在 run 目錄內生成最小化的 `mcp_config_b2.json`（只啟用 `memory` + `web_search`）以降低外部 auth 變因。
+
 ### 📋 待完成的手動測試
 根據 `E2E_TEST_GUIDE.md` 執行以下測試：
 

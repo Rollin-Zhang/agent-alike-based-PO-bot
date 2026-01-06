@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "contract_observation.v1.0.schema.json",
+  "title": "E2E Contract Observation (v1.0)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "phase",
+    "run_id",
+    "started_at",
+    "ended_at",
+    "base_url",
+    "endpoints"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "phase": { "type": "string", "enum": ["A"] },
+    "run_id": { "type": "string", "minLength": 8 },
+    "started_at": { "type": "string", "format": "date-time" },
+    "ended_at": { "type": "string", "format": "date-time" },
+    "base_url": { "type": "string", "minLength": 8 },
+    "env": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "endpoints": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "method", "path", "status", "ok"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "method": { "type": "string", "enum": ["GET", "POST"] },
+          "path": { "type": "string", "minLength": 1 },
+          "status": { "type": "integer", "minimum": 0 },
+          "ok": { "type": "boolean" },
+          "note": { "type": "string" },
+          "request_sample": {},
+          "response_sample": {}
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    }
+  }
+}

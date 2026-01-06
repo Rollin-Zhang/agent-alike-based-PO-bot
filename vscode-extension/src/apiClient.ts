@@ -153,7 +153,8 @@ export class ApiClient {
         capabilities?: string[]
     ): Promise<Ticket[]> {
         const ask = Math.max(1, max);
-        const payload: any = { kind, max: ask, lease_sec: leaseSec };
+        // Server expects { kind, limit, lease_sec }
+        const payload: any = { kind, limit: ask, lease_sec: leaseSec };
         if (capabilities) payload.capabilities = capabilities;
 
         try {
@@ -174,8 +175,19 @@ export class ApiClient {
             const list = rawList.slice(0, ask);
             
             // 3. 映射 (這裡會呼叫修復後的 mapLeasedTicket)
-            const mapped = list.map((item, index) => {
+            const mapped = list.map((item) => {
                 try {
+                    // Stage 2 server returns full ticket objects; preserve them (incl lease_owner/token)
+                    if (item && typeof item === 'object' && (item.id || item.ticket_id) && item.metadata) {
+                        const ticketId = item.ticket_id || item.id;
+                        return {
+                            ...item,
+                            id: item.id || ticketId,
+                            ticket_id: ticketId
+                        } as Ticket;
+                    }
+
+                    // Legacy/compat fallback
                     return this.mapLeasedTicket(kind, item);
                 } catch (err) {
                     this.logger.error(`[API] Map failed for item`, err);
@@ -331,6 +343,18 @@ export class ApiClient {
         }
     }
 
+    /** 依狀態取得票據（Stage 2: pending/running/done/blocked/failed） */
+    async getTicketsByStatus(status: string, limit: number = 100): Promise<Ticket[]> {
+        const q = new URLSearchParams({ status, limit: String(limit) }).toString();
+        try {
+            const response = await this.makeRequest<Ticket[]>('GET', `/v1/tickets?${q}`);
+            return response || [];
+        } catch (error) {
+            this.logger.debug(`Failed to fetch tickets by status=${status}`, error);
+            return [];
+        }
+    }
+
     /** 取得單張票據 */
     async getTicket(ticketId: string): Promise<Ticket> {
         this.logger.debug(`Fetching ticket ${ticketId}`);
@@ -363,7 +387,13 @@ export class ApiClient {
     /** v1: TRIAGE 專用回填 */
     async fillTicketV1(
         ticketId: string,
-        body: { lease_id?: string; outputs: any; by?: string; tokens?: { input?: number; output?: number } }
+        body: {
+            outputs: any;
+            by?: string;
+            tokens?: { input?: number; output?: number };
+            lease_owner?: string;
+            lease_token?: string;
+        }
     ): Promise<ApiResponse> {
         const payloadSize = body.outputs ? JSON.stringify(body.outputs).length : 0;
         this.logger.debug(`Filling ticket (v1) ${ticketId}`, { 

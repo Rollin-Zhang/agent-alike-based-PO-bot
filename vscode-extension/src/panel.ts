@@ -52,6 +52,10 @@ export class TicketPanel implements vscode.TreeDataProvider<PanelItem>, vscode.D
             // 獲取所有狀態的票據
             const allTickets = await Promise.allSettled([
                 this.apiClient.getPendingTickets(),
+                // Stage 2
+                this.fetchTicketsByStatus('running'),
+                this.fetchTicketsByStatus('done'),
+                this.fetchTicketsByStatus('blocked'),
                 this.fetchTicketsByStatus('drafted'),
                 this.fetchTicketsByStatus('completed'),
                 this.fetchTicketsByStatus('approved'),
@@ -86,9 +90,7 @@ export class TicketPanel implements vscode.TreeDataProvider<PanelItem>, vscode.D
      */
     private async fetchTicketsByStatus(status: string): Promise<Ticket[]> {
         try {
-            // 注意：這裡假設 Orchestrator 支援按狀態查詢
-            // 實際實作可能需要調整
-            return [];
+            return await this.apiClient.getTicketsByStatus(status, 500);
         } catch (error) {
             this.logger.debug(`Failed to fetch ${status} tickets`, error);
             return [];
@@ -246,9 +248,12 @@ export class TicketPanel implements vscode.TreeDataProvider<PanelItem>, vscode.D
             const colors: Record<string, string> = {
                 'pending': '#ffa500',
                 'in_progress': '#0066cc',
+                'running': '#0066cc',
                 'drafted': '#28a745',
                 'completed': '#17a2b8',
+                'done': '#28a745',
                 'approved': '#6f42c1',
+                'blocked': '#ffa500',
                 'failed': '#dc3545'
             };
             
@@ -374,9 +379,12 @@ class StatusGroupItem extends PanelItem {
         const iconMap: Record<string, string> = {
             'pending': 'clock',
             'in_progress': 'loading~spin',
+            'running': 'loading~spin',
             'drafted': 'edit',
             'completed': 'check',
+            'done': 'check',
             'approved': 'verified',
+            'blocked': 'warning',
             'failed': 'error'
         };
         
@@ -433,9 +441,12 @@ ${t.draft ? `\n草稿: ${t.draft.content}\n信心: ${(t.draft.confidence * 100).
         const iconMap: Record<string, string> = {
             'pending': 'clock',
             'in_progress': 'loading~spin',
+            'running': 'loading~spin',
             'drafted': 'edit',
             'completed': 'check',
+            'done': 'check',
             'approved': 'verified',
+            'blocked': 'warning',
             'failed': 'error'
         };
         

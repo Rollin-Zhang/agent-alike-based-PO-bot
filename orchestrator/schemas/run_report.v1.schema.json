@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "run_report.v1.schema.json",
+  "title": "RunReport v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "run_id",
+    "as_of",
+    "ticket_id",
+    "retry_policy_id",
+    "max_attempts",
+    "terminal_status",
+    "primary_failure_code",
+    "started_at",
+    "ended_at",
+    "duration_ms",
+    "step_reports",
+    "attempt_events"
+  ],
+  "properties": {
+    "version": { "type": "string", "const": "v1" },
+    "run_id": { "type": "string", "format": "uuid" },
+    "as_of": { "type": "string", "format": "date-time" },
+    "ticket_id": { "type": "string", "minLength": 1 },
+    "retry_policy_id": { "type": "string", "minLength": 1 },
+    "max_attempts": { "type": "integer", "minimum": 1 },
+    "terminal_status": { "type": "string", "enum": ["ok", "failed", "blocked"] },
+    "primary_failure_code": { "type": ["string", "null"] },
+    "started_at": { "type": "string", "format": "date-time" },
+    "ended_at": { "type": "string", "format": "date-time" },
+    "duration_ms": { "type": "number", "minimum": 0 },
+    "step_reports": {
+      "type": "array",
+      "items": { "$ref": "step_report.v1.schema.json" }
+    },
+    "attempt_events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["at", "type", "step_index", "tool_name", "status", "code", "message"],
+        "properties": {
+          "at": { "type": "string", "format": "date-time" },
+          "type": { "type": "string", "enum": ["RUN_START", "RUN_END", "STEP_START", "STEP_END"] },
+          "step_index": { "type": ["integer", "null"], "minimum": 1 },
+          "tool_name": { "type": ["string", "null"] },
+          "status": { "type": ["string", "null"] },
+          "code": { "type": ["string", "null"] },
+          "message": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

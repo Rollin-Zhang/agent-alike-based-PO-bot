@@ -130,6 +130,10 @@ curl -s 'http://127.0.0.1:3000/v1/tickets?limit=50' | jq
   - TRIAGE：包含 `decision`, `target_prompt_id`, `reply_strategy`, `information_needs` 等
   - REPLY：包含 `reply`, `used_strategy`, `process_trace` 等
 
+補充（避免規格漂移）：
+- `/v1/tickets` 目前只支援 `status` / `limit` 等簡單查詢；更細的篩選請用 `jq` 在 client 端做。
+- Orchestrator 內部的 `TicketStore.list({ ... })` 額外支援「query filter」（含 dotted path），供派生/回收邏輯使用；其中 `kind`、`parent_ticket_id` 只是內部相容性 alias（等價於 `metadata.kind`、`metadata.parent_ticket_id`），**不是對外 API 合約**，請不要把它當成長期 SSOT。
+
 如果你要找單一 ticket，可用 `jq` 篩選（示意）：
 
 ```bash

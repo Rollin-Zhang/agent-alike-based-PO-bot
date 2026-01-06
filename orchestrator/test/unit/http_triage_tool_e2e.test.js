@@ -213,7 +213,7 @@ async function testHttpTriageToolE2E() {
     console.log('[Test] Performing first fill...');
     const fillResp1 = await httpPost(port, `/v1/tickets/${triageId}/fill`, {
       outputs: { decision: 'APPROVE', reason: 'HTTP test approval' },
-      by: 'test-runner'
+      by: 'http_fill'
     });
 
     assert.strictEqual(fillResp1.status, 200, 'First fill should succeed');
@@ -266,7 +266,7 @@ async function testHttpTriageToolE2E() {
     console.log('[Test] Performing second fill (idempotency test)...');
     const fillResp2 = await httpPost(port, `/v1/tickets/${triageId}/fill`, {
       outputs: { decision: 'APPROVE', reason: 'Second approval' },
-      by: 'test-runner'
+      by: 'http_fill'
     });
 
     assert.strictEqual(fillResp2.status, 200, 'Second fill should succeed');

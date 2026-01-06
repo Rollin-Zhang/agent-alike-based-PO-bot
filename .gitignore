@@ -47,6 +47,8 @@ vscode-extension/*.vsix
 # Orchestrator temp and generated data
 orchestrator/backups/
 orchestrator/logs/
+orchestrator/out/
+orchestrator/evidence_store/
 
 # OS / miscellaneous
 Thumbs.db

@@ -7,7 +7,7 @@
 
 const assert = require('assert');
 const { startServerWithEnv } = require('./helpers/server');
-const { httpPostEvent, httpPostFill, httpListTickets } = require('./helpers/http');
+const { httpPostEvent, httpPostFill, httpGetTicket, httpListTickets } = require('./helpers/http');
 const { waitForTicket, findReplyByParent, sleep } = require('./helpers/waitFor');
 
 // MCP startup blacklist patterns
@@ -79,6 +79,160 @@ async function testTriageToolReplyChain() {
     assert.ok(replyTicket.metadata.triage_reference_id, 'Should have triage_reference_id');
 
     console.log('[Test] testTriageToolReplyChain: PASS ✓');
+    return true;
+  } finally {
+    await stop();
+  }
+}
+
+/**
+ * Test 1b: Link correctness is verified via HTTP GET (not snapshot placeholders)
+ * - Verifies TRIAGE.derived.tool_ticket_id, TOOL.parent_ticket_id, TOOL.derived.reply_ticket_id,
+ *   REPLY.parent_ticket_id and idempotency (no duplicates)
+ */
+async function testHttpLinkCorrectnessViaGetTicket() {
+  console.log('[Test] testHttpLinkCorrectnessViaGetTicket: START');
+
+  const { baseUrl, stop } = await startServerWithEnv({
+    NO_MCP: 'true',
+    ENABLE_TOOL_DERIVATION: 'true',
+    ENABLE_REPLY_DERIVATION: 'true'
+  });
+
+  try {
+    // TRIAGE
+    const triageEvent = {
+      type: 'thread_post',
+      source: 'test',
+      event_id: 'test-link-correctness-001',
+      content: 'Link correctness test (GET /v1/tickets/:id)',
+      // Must pass TriageFilter default gates (gate0b: min_likes=10, min_comments=5)
+      features: { engagement: { likes: 100, comments: 50 } }
+    };
+
+    const eventResponse = await httpPostEvent(baseUrl, triageEvent);
+    assert.strictEqual(eventResponse.status, 200, 'Event POST should succeed');
+    const triageTicketId = eventResponse.data.ticket_id;
+    assert.ok(triageTicketId, 'Should create TRIAGE ticket');
+
+    const triageFill1 = await httpPostFill(baseUrl, triageTicketId, {
+      decision: 'APPROVE',
+      short_reason: 'Link correctness test',
+      reply_strategy: 'standard',
+      target_prompt_id: 'reply.standard'
+    });
+    assert.strictEqual(triageFill1.status, 200, 'TRIAGE fill should succeed');
+
+    // TOOL
+    const toolTicket = await waitForTicket(baseUrl, (t) =>
+      t.metadata?.kind === 'TOOL' && t.metadata?.parent_ticket_id === triageTicketId
+    );
+    assert.ok(toolTicket?.id, 'Should create TOOL ticket');
+
+    // Fill TOOL -> REPLY
+    const toolFill1 = await httpPostFill(baseUrl, toolTicket.id, {
+      tool_verdict: 'PROCEED',
+      reply_strategy: 'standard',
+      target_prompt_id: 'reply.standard',
+      reply_text: 'Generated reply (link correctness)'
+    });
+    assert.strictEqual(toolFill1.status, 200, 'TOOL fill should succeed');
+
+    const replyTicket = await findReplyByParent(baseUrl, toolTicket.id);
+    assert.ok(replyTicket?.id, 'Should create REPLY ticket');
+
+    // Verify link correctness via GET /v1/tickets/:id
+    const triageGet1 = await httpGetTicket(baseUrl, triageTicketId);
+    assert.strictEqual(triageGet1.status, 200, 'GET TRIAGE should succeed');
+    assert.strictEqual(
+      triageGet1.data?.derived?.tool_ticket_id,
+      toolTicket.id,
+      'TRIAGE.derived.tool_ticket_id should point to TOOL.id'
+    );
+
+    const toolGet1 = await httpGetTicket(baseUrl, toolTicket.id);
+    assert.strictEqual(toolGet1.status, 200, 'GET TOOL should succeed');
+    assert.strictEqual(
+      toolGet1.data?.metadata?.parent_ticket_id,
+      triageTicketId,
+      'TOOL.metadata.parent_ticket_id should point to TRIAGE.id'
+    );
+    assert.strictEqual(
+      toolGet1.data?.metadata?.triage_reference_id,
+      triageTicketId,
+      'TOOL.metadata.triage_reference_id should reference TRIAGE.id'
+    );
+    assert.strictEqual(
+      toolGet1.data?.derived?.reply_ticket_id,
+      replyTicket.id,
+      'TOOL.derived.reply_ticket_id should point to REPLY.id'
+    );
+
+    const replyGet1 = await httpGetTicket(baseUrl, replyTicket.id);
+    assert.strictEqual(replyGet1.status, 200, 'GET REPLY should succeed');
+    assert.strictEqual(
+      replyGet1.data?.metadata?.parent_ticket_id,
+      toolTicket.id,
+      'REPLY.metadata.parent_ticket_id should point to TOOL.id'
+    );
+    assert.strictEqual(
+      replyGet1.data?.metadata?.triage_reference_id,
+      triageTicketId,
+      'REPLY.metadata.triage_reference_id should reference TRIAGE.id'
+    );
+
+    // Idempotency: re-fill TRIAGE should not create duplicate TOOL
+    const triageFill2 = await httpPostFill(baseUrl, triageTicketId, {
+      decision: 'APPROVE',
+      short_reason: 'Link correctness test (second fill)',
+      reply_strategy: 'standard',
+      target_prompt_id: 'reply.standard'
+    });
+    assert.strictEqual(triageFill2.status, 200, 'Second TRIAGE fill should succeed');
+    await sleep(300);
+
+    const triageGet2 = await httpGetTicket(baseUrl, triageTicketId);
+    assert.strictEqual(
+      triageGet2.data?.derived?.tool_ticket_id,
+      toolTicket.id,
+      'Second TRIAGE fill should not change derived.tool_ticket_id'
+    );
+
+    const listAfterTriageRefill = await httpListTickets(baseUrl, { limit: 10000 });
+    const allTicketsAfterTriageRefill = listAfterTriageRefill.data || [];
+    const toolsForTriage = allTicketsAfterTriageRefill.filter(
+      (t) => t.metadata?.kind === 'TOOL' && t.metadata?.parent_ticket_id === triageTicketId
+    );
+    assert.strictEqual(toolsForTriage.length, 1, 'Should have exactly 1 TOOL for TRIAGE (idempotent)');
+
+    // Idempotency: re-fill TOOL(PROCEED) should not create duplicate REPLY
+    const toolFill2 = await httpPostFill(baseUrl, toolTicket.id, {
+      tool_verdict: 'PROCEED',
+      reply_strategy: 'standard',
+      target_prompt_id: 'reply.standard',
+      reply_text: 'Generated reply (second fill)'
+    });
+    assert.strictEqual(toolFill2.status, 200, 'Second TOOL fill should succeed');
+    await sleep(500);
+
+    const replyTicket2 = await findReplyByParent(baseUrl, toolTicket.id);
+    assert.strictEqual(replyTicket2.id, replyTicket.id, 'Second TOOL fill should not change REPLY id');
+
+    const toolGet2 = await httpGetTicket(baseUrl, toolTicket.id);
+    assert.strictEqual(
+      toolGet2.data?.derived?.reply_ticket_id,
+      replyTicket.id,
+      'Second TOOL fill should not change derived.reply_ticket_id'
+    );
+
+    const listAfterToolRefill = await httpListTickets(baseUrl, { limit: 10000 });
+    const allTicketsAfterToolRefill = listAfterToolRefill.data || [];
+    const repliesForTool = allTicketsAfterToolRefill.filter(
+      (t) => t.metadata?.kind === 'REPLY' && t.metadata?.parent_ticket_id === toolTicket.id
+    );
+    assert.strictEqual(repliesForTool.length, 1, 'Should have exactly 1 REPLY for TOOL (idempotent)');
+
+    console.log('[Test] testHttpLinkCorrectnessViaGetTicket: PASS ✓');
     return true;
   } finally {
     await stop();
@@ -664,6 +818,7 @@ async function testMalformedOutputs() {
 // Export tests
 module.exports = {
   testTriageToolReplyChain,
+  testHttpLinkCorrectnessViaGetTicket,
   testIdempotency,
   testRequiredKeysSuperset,
   testToolOnlyModeNegative,

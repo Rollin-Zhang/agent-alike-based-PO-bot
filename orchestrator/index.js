@@ -10,18 +10,41 @@ const TicketStore = require('./store/TicketStore');
 const ToolGateway = require('./tool_gateway/ToolGateway');
 const { resolveRuntimeEnv } = require('./shared/constants');
 const deriveToolTicketFromTriage = require('./lib/deriveToolTicketFromTriage');
-const { readDerived } = require('./lib/derivedCompat');
+const { maybeDeriveReplyFromToolOnFill } = require('./lib/maybeDeriveReplyFromToolOnFill');
+const schemaGate = require('./lib/schemaGate');
+
+// --- M2-C.1 Cutover observability ---
+const { createCutoverPolicy } = require('./lib/compat/CutoverPolicy');
+const { cutoverMetrics } = require('./lib/compat/cutoverMetrics');
+
+// --- M2-A.1 Readiness Imports ---
+const { evaluateReadiness } = require('./lib/readiness/evaluateReadiness');
+const { requireDeps } = require('./lib/readiness/requireDeps');
+const { readinessMetrics } = require('./lib/readiness/readinessMetrics');
+const { formatStrictInitFailOutput, depsForToolName } = require('./lib/readiness/ssot');
 
 // --- [CONFIG] NO_MCP Boot Mode ---
 // When NO_MCP=true, server runs without MCP connections (test mode)
 const NO_MCP = process.env.NO_MCP === 'true';
-const mcpConfig = NO_MCP 
-  ? { mcp_servers: {}, tool_whitelist: [] } 
+
+// Allow overriding MCP config path for Real MCP (Phase B) runs
+const MCP_CONFIG_PATH = process.env.MCP_CONFIG_PATH;
+const mcpConfig = NO_MCP
+  ? { mcp_servers: {}, tool_whitelist: [] }
   : (() => {
       try {
-        return require('./mcp_config.json');
+        const configPath = MCP_CONFIG_PATH
+          ? path.resolve(MCP_CONFIG_PATH)
+          : path.resolve(__dirname, 'mcp_config.json');
+
+        if (!fs.existsSync(configPath)) {
+          console.error('[FATAL] MCP config not found:', configPath);
+          process.exit(1);
+        }
+
+        return JSON.parse(fs.readFileSync(configPath, 'utf8'));
       } catch (err) {
-        console.error('[FATAL] Failed to load mcp_config.json:', err.message);
+        console.error('[FATAL] Failed to load MCP config:', err.message);
         process.exit(1);
       }
     })();
@@ -143,6 +166,13 @@ class Orchestrator {
     // Support custom TicketStore path for testing
     const storePath = process.env.TICKETSTORE_PATH || null;
     this.ticketStore = new TicketStore(storePath);
+
+    // Setup TicketStore audit logger (guardrail rejects)
+    if (typeof TicketStore.setAuditLogger === 'function') {
+      TicketStore.setAuditLogger((entry) => {
+        this.writeAuditLog('ticket_store.jsonl', entry);
+      });
+    }
     // Resolve MCP paths before initializing ToolGateway
     const resolvedConfig = resolveMCPPaths(mcpConfig);
     this.toolGateway = new ToolGateway(logger, resolvedConfig);
@@ -152,12 +182,37 @@ class Orchestrator {
       const logDir = path.resolve(process.cwd(), 'logs');
       if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
     }
+    
+    // Setup schemaGate audit logger
+    schemaGate.setAuditLogger((entry) => {
+      this.writeAuditLog('schema_gate.jsonl', entry);
+    });
   }
 
   async start() {
     // Only initialize ToolGateway in normal mode
     if (!NO_MCP) {
       await this.toolGateway.initialize();
+    }
+
+    // --- M2-A.1 STRICT_MCP_INIT Check ---
+    const STRICT_MCP_INIT = process.env.STRICT_MCP_INIT === 'true';
+    if (STRICT_MCP_INIT) {
+      // Get readiness snapshot immediately after init
+      const depStates = this.toolGateway.getDepStates();
+      const snapshot = evaluateReadiness(depStates, new Date());
+
+      // Check if any required deps are not ready
+      const requiredNotReady = Object.entries(snapshot.required).filter(([_, dep]) => !dep.ready);
+      
+      if (requiredNotReady.length > 0) {
+        // Output last snapshot to stderr with fixed prefix
+        const output = formatStrictInitFailOutput(snapshot);
+        console.error(output);
+        
+        // Exit with code 1
+        process.exit(1);
+      }
     }
 
     this.app.use(cors());
@@ -185,7 +240,9 @@ class Orchestrator {
   writeAuditLog(filename, data) {
     if (!ENABLE_AUDIT_LOGS) return;
     const filepath = path.resolve(process.cwd(), 'logs', filename);
-    const entry = JSON.stringify({ at: new Date().toISOString(), ...data });
+    const entry = filename === 'schema_gate.jsonl'
+      ? JSON.stringify(data)
+      : JSON.stringify({ at: new Date().toISOString(), ...data });
     
     fs.appendFile(filepath, entry + '\n', (err) => {
       if (err) logger.error(`Failed to write log ${filename}`, err.message);
@@ -220,6 +277,22 @@ class Orchestrator {
         }
       };
 
+      // --- SchemaGate: validate before create (boundary: ticket_create, direction: ingress) ---
+      const gateResult = schemaGate.gateIngress(ticket, {
+        boundary: schemaGate.BOUNDARY.TICKET_CREATE,
+        kind: schemaGate.KIND.TRIAGE,
+        ticketId: ticketId
+      });
+      
+      if (!gateResult.ok) {
+        // Strict mode rejection
+        return { 
+          status: 'rejected', 
+          error_code: gateResult.code,
+          schema_warn_count: gateResult.result.warnCount
+        };
+      }
+      
       await this.ticketStore.create(ticket);
       logger.info(`[Ingest] Ticket created: ${ticketId}`);
       return { status: 'queued', ticket_id: ticketId };
@@ -228,6 +301,13 @@ class Orchestrator {
     this.app.post('/events', async (req, res) => {
       try {
         const result = await ingestEvent(req.body);
+        // Set schema warn header if enabled (never modifies body)
+        if (result.schema_warn_count !== undefined) {
+          schemaGate.setWarnHeader(res, result.schema_warn_count);
+        }
+        if (result.status === 'rejected') {
+          return res.status(400).json(result);
+        }
         res.json(result);
       } catch (e) {
         logger.error('Event ingestion failed', e);
@@ -289,7 +369,7 @@ class Orchestrator {
           payload: ticket.payload,
           outputs: ticket.outputs,
           event: ticket.event,
-          derived: readDerived(ticket) || null,  // Use compat helper with fallback
+          derived: ticket.derived || null,
           created_at: ticket.created_at,
           completed_at: ticket.completed_at
         });
@@ -301,7 +381,8 @@ class Orchestrator {
 
     this.app.post('/v1/tickets/:id/fill', async (req, res) => {
       const { id } = req.params;
-      const { outputs, by } = req.body;
+      const { outputs, by, lease_owner, lease_token } = req.body;
+      let schemaWarnCount = 0;
 
       try {
         const ticket = await this.ticketStore.get(id);
@@ -310,7 +391,43 @@ class Orchestrator {
         // --- TRIAGE→TOOL Derivation (Block A) ---
         await deriveToolTicketFromTriage(ticket, outputs, this.ticketStore);
 
-        await this.ticketStore.complete(id, outputs, by);
+        // --- TOOL→REPLY Derivation (Block B) ---
+        await maybeDeriveReplyFromToolOnFill(ticket, outputs, this.ticketStore, logger);
+
+        // --- SchemaGate: validate completed ticket before persist (boundary: ticket_complete) ---
+        const completedTicketPreview = {
+          ...ticket,
+          status: 'done',
+          metadata: { ...ticket.metadata, final_outputs: outputs }
+        };
+        const gateResult = schemaGate.gateIngress(completedTicketPreview, {
+          boundary: schemaGate.BOUNDARY.TICKET_COMPLETE,
+          kind: ticket.metadata?.kind || schemaGate.KIND.UNKNOWN,
+          ticketId: id
+        });
+        schemaWarnCount = gateResult.result.warnCount;
+        
+        if (!gateResult.ok) {
+          // Strict mode rejection
+          schemaGate.setWarnHeader(res, schemaWarnCount);
+          return res.status(gateResult.httpStatus).json({
+            status: 'rejected',
+            error_code: gateResult.code,
+            schema_warn_count: schemaWarnCount
+          });
+        }
+
+        const completeResult = await this.ticketStore.complete(id, outputs, by, { lease_owner, lease_token });
+        if (completeResult && completeResult.ok === false) {
+          schemaGate.setWarnHeader(res, schemaWarnCount);
+          return res.status(409).json({
+            status: 'rejected',
+            error_code: completeResult.code
+          });
+        }
+        
+        // Set warn header before response (never modifies body)
+        schemaGate.setWarnHeader(res, schemaWarnCount);
         res.json({ status: 'ok' });
 
         // Audit Logging
@@ -332,7 +449,7 @@ class Orchestrator {
                 reply: outputs.reply,
                 confidence: outputs.confidence,
                 used_strategy: outputs.used_strategy,
-                by: by
+            by: by
             });
         }
 
@@ -354,37 +471,68 @@ class Orchestrator {
     // [NEW] 戰情儀表板 - 專門為了回應您的 curl 監控需求
     this.app.get('/metrics', async (req, res) => {
         try {
-            const allTickets = await this.ticketStore.list({ limit: 10000 });
-            
-            // 基礎統計
-            const total = allTickets.length;
-            const pending = allTickets.filter(t => t.status === 'pending').length;
-            const completed = allTickets.filter(t => t.status === 'completed').length;
-            const failed = allTickets.filter(t => t.status === 'failed').length;
-            const success_rate = total > 0 ? (completed / total) : 0;
+        const counts = await this.ticketStore.countByStatus();
+        const total = Object.values(counts).reduce((acc, v) => acc + (typeof v === 'number' ? v : 0), 0);
 
-            // Reply 專項統計 (識別 Reply 票)
-            const replyTickets = allTickets.filter(t => 
-                (t.flow_id && t.flow_id.includes('reply')) || 
-                (t.metadata && t.metadata.kind === 'REPLY')
-            );
-            const replies_indexed = replyTickets.length;
-            const replies_pending = replyTickets.filter(t => t.status === 'pending').length;
-            const replies_done = replyTickets.filter(t => t.status === 'completed').length;
+        const pending = counts.pending || 0;
+        const running = counts.running || 0;
+        const done = counts.done || 0;
+        const failed = counts.failed || 0;
+        const blocked = counts.blocked || 0;
+
+        // Success rate aligned to Stage 2 terminal outcomes
+        const terminal = done + failed + blocked;
+        const success_rate = terminal > 0 ? (done / terminal) : 0;
+
+        // Reply 專項統計 (識別 Reply 票)
+        const allTickets = await this.ticketStore.list({ limit: 10000 });
+        const replyTickets = allTickets.filter(t =>
+          (t.flow_id && t.flow_id.includes('reply')) ||
+          (t.metadata && t.metadata.kind === 'REPLY')
+        );
+        const replies_indexed = replyTickets.length;
+        const replies_pending = replyTickets.filter(t => t.status === 'pending').length;
+        const replies_running = replyTickets.filter(t => t.status === 'running').length;
+        const replies_done = replyTickets.filter(t => t.status === 'done' || t.status === 'completed').length;
+        const replies_failed = replyTickets.filter(t => t.status === 'failed').length;
+        const replies_blocked = replyTickets.filter(t => t.status === 'blocked').length;
+
+        // --- M2-A.1 Readiness Metrics ---
+        const depStates = this.toolGateway.getDepStates();
+        const readinessSnapshot = evaluateReadiness(depStates, new Date());
+        const readiness = readinessMetrics.getMetricsSnapshot(readinessSnapshot);
+
+        // --- M2-C.1 Cutover ---
+        const policy = createCutoverPolicy();
+        const cutover = {
+          cutover_until_ms: policy.cutover_until_ms,
+          env_source: policy.env_source,
+          mode: policy.mode(Date.now()),
+          metrics: cutoverMetrics.snapshot()
+        };
 
             res.json({
                 tickets: {
                     total,
                     pending,
-                    completed,
+                running,
+                done,
                     failed,
+                blocked,
                     success_rate: Number(success_rate.toFixed(2))
                 },
                 replies: {
                     indexed: replies_indexed,
                     pending: replies_pending,
-                    done: replies_done
+                running: replies_running,
+                done: replies_done,
+                failed: replies_failed,
+                blocked: replies_blocked
                 },
+                schema_gate: schemaGate.getMetrics(),
+                ticket_store: this.ticketStore.getGuardMetrics(),
+                readiness: readiness,  // M2-A.1: Add readiness block
+                cutover,
                 timestamp: new Date().toISOString()
             });
         } catch (e) {
@@ -392,17 +540,45 @@ class Orchestrator {
         }
     });
 
-    this.app.post('/v1/tools/execute', async (req, res) => {
+    // --- M2-A.1: Apply requireDeps middleware to /v1/tools/execute ---
+    // 必修保護：gating deps 透過 depsForToolName(toolName) 插槽，避免未來 filesystem 工具需求漂移。
+    const getDepStatesFn = () => this.toolGateway.getDepStates();
+    const toolsExecuteGating = (req, res, next) => {
+      const toolName = req?.body?.tool;
+
+      // Guardrail (小洞 A): missing/invalid toolName must be rejected upstream.
+      // Do not let depsForToolName decide this case (prevents bypass via "no tool").
+      if (typeof toolName !== 'string' || toolName.trim() === '') {
+        return res.status(400).json({ error: 'missing_tool' });
+      }
+
+      const depKeys = depsForToolName(toolName);
+      return requireDeps(depKeys, getDepStatesFn)(req, res, next);
+    };
+
+    this.app.post('/v1/tools/execute',
+      toolsExecuteGating,
+      async (req, res) => {
+        try {
+          const { server, tool, arguments: args } = req.body;
+          const result = await this.toolGateway.executeTool(server, tool, args || {});
+          res.json(result);
+        } catch (e) {
+          res.status(500).json({ error: e.message });
+        }
+      }
+    );
+
+    // --- M2-A.1: Replace /health with readiness snapshot ---
+    this.app.get('/health', (req, res) => {
       try {
-        const { server, tool, arguments: args } = req.body;
-        const result = await this.toolGateway.executeTool(server, tool, args || {});
-        res.json(result);
+        const depStates = this.toolGateway.getDepStates();
+        const snapshot = evaluateReadiness(depStates, new Date());
+        res.status(200).json(snapshot);
       } catch (e) {
         res.status(500).json({ error: e.message });
       }
     });
-
-    this.app.get('/health', (req, res) => res.json({ status: 'ok', version: 'v3-final' }));
     
     // Alias for legacy listing
     this.app.get('/tickets', async (req, res) => {

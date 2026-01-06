@@ -6,11 +6,39 @@ const path = require('path');
 
 class ToolGateway {
   constructor(logger, config) {
-    this.logger = logger || console;
+    const baseLogger = logger || console;
+    // Defensive: some tests pass a "quiet logger" without .info
+    this.logger = {
+      info: (baseLogger.info || baseLogger.log || (() => {})).bind(baseLogger),
+      warn: (baseLogger.warn || baseLogger.log || (() => {})).bind(baseLogger),
+      error: (baseLogger.error || baseLogger.log || (() => {})).bind(baseLogger),
+      log: (baseLogger.log || (() => {})).bind(baseLogger)
+    };
     // 支援從參數傳入 config，或自動讀取
     this.config = config || this.loadMCPConfig();
     this.clients = new Map(); // 用於儲存 Stdio 連線 (serverName -> Client)
     this.toolMap = this.buildToolMap();
+  }
+
+  /**
+   * Graceful shutdown: close all MCP client transports.
+   *
+   * NOTE: Without this, processes that used stdio MCP servers may keep the event loop alive
+   * and make gated "real MCP" tests hang.
+   */
+  async shutdown() {
+    const entries = Array.from(this.clients.entries());
+    this.clients.clear();
+
+    for (const [serverName, client] of entries) {
+      try {
+        if (client && typeof client.close === 'function') {
+          await client.close();
+        }
+      } catch (e) {
+        this.logger?.warn?.(`[ToolGateway] Failed to close client for ${serverName}`, { error: e?.message });
+      }
+    }
   }
 
   loadMCPConfig() {
@@ -177,13 +205,89 @@ class ToolGateway {
   }
 
   writeAuditLog(entry) {
-    const logPath = path.join(process.cwd(), 'logs', 'tool_audit.jsonl');
+    const configuredPath = process.env.TOOL_AUDIT_PATH || process.env.TOOL_AUDIT_LOG_PATH;
+    const logPath = configuredPath
+      ? path.resolve(configuredPath)
+      : path.join(process.cwd(), 'logs', 'tool_audit.jsonl');
     const logDir = path.dirname(logPath);
     if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
     
     fs.appendFile(logPath, JSON.stringify(entry) + '\n', (err) => {
       if (err) console.error('Failed to write audit log', err);
     });
+  }
+
+  /**
+   * M2-A.1: Get dependency states (ProviderId 視角)
+   * 
+   * @returns {Object} { [providerId]: { ready:boolean, code:DEP_*, detail?:object } }
+   * 
+   * 不可變規則：
+   * - 只回報 SSOT 中定義的 providers (memory, web_search, notebooklm)
+   * - NO_MCP=true 時所有 providers ready=false, code=DEP_UNAVAILABLE
+   * - Stdio servers: 以 this.clients 是否有連線決定
+   * - HTTP servers: 不在此版本處理（未來可擴充 health check）
+   */
+  getDepStates() {
+    const { DEP_CODES } = require('../lib/readiness/ssot');
+    const states = {};
+
+    // Keep this list aligned with SSOT's ProviderIds
+    const knownProviders = ['memory', 'web_search', 'notebooklm'];
+
+    // Check NO_MCP mode
+    const NO_MCP = process.env.NO_MCP === 'true';
+    if (NO_MCP) {
+      // NO_MCP: all known providers unavailable
+      for (const providerId of knownProviders) {
+        states[providerId] = {
+          ready: false,
+          code: DEP_CODES.UNAVAILABLE,
+          // Low-cardinality detail only
+          detail: { provider: providerId, phase: 'boot', hint: 'no_mcp_mode' }
+        };
+      }
+      return states;
+    }
+
+    // Normal mode: check stdio servers connectivity
+    const servers = this.config.mcp_servers || {};
+
+    for (const providerId of knownProviders) {
+      const serverConfig = servers[providerId];
+
+      if (!serverConfig) {
+        states[providerId] = {
+          ready: false,
+          // Guardrail (小洞 B): config 缺失時使用穩定且一致的 dep-level code
+          code: DEP_CODES.UNAVAILABLE,
+          // Low-cardinality detail only
+          detail: { provider: providerId, phase: 'config', hint: 'missing_config' }
+        };
+        continue;
+      }
+
+      if (serverConfig.command) {
+        // Stdio server: check if client is connected
+        const client = this.clients.get(providerId);
+        if (client) {
+          states[providerId] = { ready: true, code: null };
+        } else {
+          states[providerId] = {
+            ready: false,
+            code: DEP_CODES.INIT_FAILED,
+            // Low-cardinality detail only (raw error strings should go to audit logs, not snapshot)
+            detail: { provider: providerId, phase: 'init', hint: 'client_not_connected' }
+          };
+        }
+      } else {
+        // HTTP server: 暫不支援 health check（未來可擴充）
+        // 當前假設 HTTP servers 總是 ready（舊行為相容）
+        states[providerId] = { ready: true, code: null };
+      }
+    }
+
+    return states;
   }
 }
 

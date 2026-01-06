@@ -82,6 +82,76 @@ export DRY_RUN=false
 pm2 restart all
 ```
 
+## M2 完整驗收 (Acceptance Matrix)
+
+M2 驗收至少包含兩條主線（NO_MCP / Real MCP），並建議納入 strict readiness（以 metrics 為證據）。
+
+### A. M2 Acceptance（NO_MCP 模式）
+
+目的：保證「降級模式」下流程能穩定跑完，且所有 guard/metrics 不會崩。
+
+跑法：
+```bash
+cd orchestrator
+npm run accept:no_mcp
+```
+
+Pass 條件：
+- probes（NO_MCP=true）PASS
+- unit suite PASS
+- /metrics shape 仍正確（含 cutover block）
+
+### B. M2 Acceptance（Real MCP 模式）
+
+目的：保證整合模式（memory/web_search/notebooklm）能跑到尾，且不因 stdout/網路波動隨機炸掉。
+
+跑法：
+```bash
+cd orchestrator
+npm run accept:real_mcp
+```
+
+Pass 條件：
+- probes（Real MCP）allPassed: true
+- unit suite PASS
+- web_search 出現 timeout log 可接受，但測試不得紅
+
+### C. Strict Gate Check（讀 /metrics，建議納入）
+
+核心精神：strict 不靠感覺，靠 metrics=0 的證據。此步驟不一定要「允許切 strict」，但必須能產出可追溯的機械化判定與理由。
+
+前提：orchestrator server 正在跑，且可存取 `/metrics`。
+
+跑法：
+```bash
+cd orchestrator
+npm run strict:check -- --url http://localhost:3000/metrics --json
+```
+
+你要收的 evidence：
+- cutover.mode
+- counters：canonical_missing, cutover_violation, legacy_read
+- strictCutoverGate 的 decision（allow/blocked）與理由
+
+### 一鍵總驗收（建議 DoD 寫死）
+
+跑法：
+```bash
+cd orchestrator
+npm run accept:m2
+```
+
+輸出：
+- 終端機摘要：PASS/FAIL + strict gate status
+- JSON 報告：`orchestrator/out/m2_acceptance_report.json`
+
+M2 完整 DoD（建議）：
+- ✅ `accept:no_mcp` 必須 PASS
+- ✅ `accept:real_mcp` 必須 PASS
+- ✅ repo-guard 測試必須在 suite 內（避免 compat / legacy path / scattered writes 回歸）
+- ✅ `/metrics.cutover` 形狀固定（含 `env_source` 等必要欄位）
+- ✅ strict gate 判斷必須可重跑、可解釋（JSON evidence）
+
 ## 監控與日誌
 
 ### 關鍵指標

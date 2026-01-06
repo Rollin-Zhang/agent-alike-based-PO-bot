@@ -1,0 +1,70 @@
+{
+  "triage": {
+    "id": "TRIAGE_ID",
+    "type": "DraftTicket",
+    "flow_id": "triage_zh_hant_v1",
+    "status": "done",
+    "metadata": {
+      "kind": "TRIAGE",
+      "parent_ticket_id": null,
+      "triage_reference_id": null
+    },
+    "derived": {
+      "tool_ticket_id": "TOOL_ID"
+    },
+    "final_outputs": {
+      "decision": "APPROVE",
+      "present": true,
+      "keys": [
+        "decision",
+        "reply_strategy",
+        "short_reason",
+        "target_prompt_id"
+      ]
+    },
+    "has_outputs_field": false
+  },
+  "tool": {
+    "id": "TOOL_ID",
+    "type": "ToolTicket",
+    "flow_id": "tool_execution_v1",
+    "status": "done",
+    "metadata": {
+      "kind": "TOOL",
+      "parent_ticket_id": "TRIAGE_ID",
+      "triage_reference_id": "TRIAGE_ID"
+    },
+    "derived": {
+      "reply_ticket_id": "REPLY_ID"
+    },
+    "tool_verdict": "PROCEED",
+    "final_outputs": {
+      "present": true,
+      "keys": [
+        "reply_strategy",
+        "target_prompt_id",
+        "tool_verdict"
+      ]
+    },
+    "has_outputs_field": false
+  },
+  "reply": {
+    "id": "REPLY_ID",
+    "type": "DraftTicket",
+    "flow_id": "reply_zh_hant_v1",
+    "status": "pending",
+    "metadata": {
+      "kind": "REPLY",
+      "parent_ticket_id": "TOOL_ID",
+      "triage_reference_id": "TRIAGE_ID",
+      "prompt_id": "reply.standard",
+      "reply_input_present": true
+    },
+    "derived": null,
+    "final_outputs": {
+      "present": false,
+      "keys": []
+    },
+    "has_outputs_field": false
+  }
+}

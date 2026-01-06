@@ -106,7 +106,8 @@ async function testGateToolVerdictNotProceed() {
   console.log('[Test] testGateToolVerdictNotProceed: START');
 
   const toolTicket = { id: 't1', metadata: { kind: 'TOOL' } };
-  const outputs = { tool_verdict: 'REJECT' }; // Not PROCEED
+  // S2-2: Use standard DEFER value (REJECT is non-standard, maps to null)
+  const outputs = { tool_verdict: 'DEFER' };
   const triageTicket = { id: 'triage1', event: {}, metadata: {} };
   const store = createStubTicketStore();
 
@@ -129,7 +130,7 @@ async function testToolVerdictSourceOutputsPrecedence() {
   const toolTicket = {
     id: 't1',
     metadata: { kind: 'TOOL' },
-    final_outputs: { tool_verdict: 'REJECT' } // Should be ignored
+    tool_verdict: { status: 'DEFER' } // Should be ignored
   };
   const outputs = { tool_verdict: 'PROCEED', reply_strategy: 'test' }; // outputs takes precedence
   const triageTicket = { id: 'triage1', event: { post_id: 'p1' }, metadata: { candidate_id: 'c1' } };
@@ -147,14 +148,14 @@ async function testToolVerdictSourceOutputsPrecedence() {
   return true;
 }
 
-// --- TEST 6: tool_verdict source - fallback to final_outputs ---
+// --- TEST 6: tool_verdict source - fallback to ticket.tool_verdict ---
 async function testToolVerdictSourceFallbackFinalOutputs() {
   console.log('[Test] testToolVerdictSourceFallbackFinalOutputs: START');
 
   const toolTicket = {
     id: 't2',
     metadata: { kind: 'TOOL' },
-    final_outputs: { tool_verdict: 'PROCEED' } // Should be used
+    tool_verdict: { status: 'PROCEED' } // Should be used
   };
   const outputs = null; // null, so fallback
   const triageTicket = { id: 'triage2', event: { post_id: 'p2' }, metadata: { candidate_id: 'c2' } };
@@ -172,16 +173,17 @@ async function testToolVerdictSourceFallbackFinalOutputs() {
   return true;
 }
 
-// --- TEST 7: tool_verdict source - malformed outputs (no crash) ---
+// --- TEST 7: tool_verdict source - malformed outputs (no tool_verdict key) ---
+// When outputs exists but has no tool_verdict, readToolVerdict falls back to ticket.tool_verdict.
 async function testToolVerdictSourceMalformedOutputs() {
   console.log('[Test] testToolVerdictSourceMalformedOutputs: START');
 
   const toolTicket = {
     id: 't3',
     metadata: { kind: 'TOOL' },
-    final_outputs: { tool_verdict: 'PROCEED' }
+    tool_verdict: { status: 'DEFER' } // Fallback will find this (not PROCEED)
   };
-  const outputs = {}; // Malformed (no tool_verdict)
+  const outputs = {}; // Malformed (no tool_verdict), will fallback
   const triageTicket = { id: 'triage3', event: {}, metadata: {} };
   const store = createStubTicketStore();
 
@@ -190,8 +192,9 @@ async function testToolVerdictSourceMalformedOutputs() {
 
   const result = await deriveReplyTicketFromTool(toolTicket, outputs, triageTicket, '', store);
 
-  assert.strictEqual(result.created, false, 'Should not create (malformed outputs)');
-  assert.strictEqual(result.reason, 'missing_tool_verdict', 'Should report missing_tool_verdict');
+  // fallback to ticket.tool_verdict=DEFER, so gate fails (not PROCEED)
+  assert.strictEqual(result.created, false, 'Should not create (verdict is DEFER from fallback)');
+  assert.strictEqual(result.reason, 'gate_tool_verdict_not_proceed', 'Should report gate_tool_verdict_not_proceed');
 
   console.log('[Test] testToolVerdictSourceMalformedOutputs: PASS ✓');
   return true;
@@ -363,20 +366,17 @@ async function testTemplateOverrideRules() {
 async function testFailFastWriteDerivedThrows() {
   console.log('[Test] testFailFastWriteDerivedThrows: START');
 
-  // Use a Proxy to intercept writeDerived and throw
-  const { writeDerived: originalWriteDerived } = require('../../lib/derivedCompat');
-  const derivedCompatModule = require.cache[require.resolve('../../lib/derivedCompat')];
-  const originalExports = { ...derivedCompatModule.exports };
-
-  // Mock writeDerived to throw
-  derivedCompatModule.exports.writeDerived = () => {
-    throw new Error('writeDerived intentionally failed');
-  };
-
-  const toolTicket = {
-    id: 't-fail',
-    metadata: { kind: 'TOOL' }
-  };
+  // Force a deterministic failure on derived write by defining a setter that throws.
+  const toolTicket = { id: 't-fail', metadata: { kind: 'TOOL' } };
+  Object.defineProperty(toolTicket, 'derived', {
+    configurable: true,
+    get() {
+      return undefined;
+    },
+    set() {
+      throw new Error('derived write intentionally failed');
+    }
+  });
   const outputs = { tool_verdict: 'PROCEED', reply_strategy: 'test' };
   const triageTicket = { id: 'triage-fail', event: {}, metadata: { candidate_id: 'c-fail' } };
   const store = createStubTicketStore();
@@ -385,20 +385,10 @@ async function testFailFastWriteDerivedThrows() {
   process.env.TOOL_ONLY_MODE = 'false';
 
   try {
-    // Need to reload the module to pick up the mocked writeDerived
-    delete require.cache[require.resolve('../../lib/deriveReplyTicketFromTool')];
-    const deriveReplyTicketFromToolMocked = require('../../lib/deriveReplyTicketFromTool');
-    
-    await deriveReplyTicketFromToolMocked(toolTicket, outputs, triageTicket, '', store);
-    assert.fail('Should throw when writeDerived fails');
+    await deriveReplyTicketFromTool(toolTicket, outputs, triageTicket, '', store);
+    assert.fail('Should throw when derived write fails');
   } catch (e) {
-    assert.ok(e.message.includes('writeDerived intentionally failed'), 'Should propagate writeDerived error');
-  } finally {
-    // Restore original writeDerived
-    derivedCompatModule.exports = originalExports;
-    // Reload the module to restore normal behavior
-    delete require.cache[require.resolve('../../lib/deriveReplyTicketFromTool')];
-    require('../../lib/deriveReplyTicketFromTool');
+    assert.ok(e.message.includes('derived write intentionally failed'), 'Should propagate derived write error');
   }
 
   console.log('[Test] testFailFastWriteDerivedThrows: PASS ✓');

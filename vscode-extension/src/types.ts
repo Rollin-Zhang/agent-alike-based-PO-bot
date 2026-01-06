@@ -47,7 +47,18 @@ export interface Ticket {
     id: string;
     ticket_id: string;
     type: string;
-    status: 'pending' | 'in_progress' | 'drafted' | 'completed' | 'approved' | 'failed' | 'leased';
+    // Stage 2 (server) + legacy (client) statuses
+    status:
+        | 'pending'
+        | 'running'
+        | 'done'
+        | 'failed'
+        | 'blocked'
+        | 'leased'
+        | 'completed'
+        | 'drafted'
+        | 'approved'
+        | 'in_progress';
     flow_id: string;
     event: {
         type: string;

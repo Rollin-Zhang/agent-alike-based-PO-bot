@@ -55,7 +55,7 @@ function httpRequest(baseUrl, path, method, data = null) {
  * @param {string} by - Optional by field
  * @returns {Promise<Object>} Response {status, data}
  */
-async function httpPostFill(baseUrl, ticketId, outputs, by = 'test-agent') {
+async function httpPostFill(baseUrl, ticketId, outputs, by = 'http_fill') {
   return httpRequest(baseUrl, `/v1/tickets/${ticketId}/fill`, 'POST', { outputs, by });
 }
 

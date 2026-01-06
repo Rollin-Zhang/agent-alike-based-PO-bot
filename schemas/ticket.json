@@ -13,9 +13,19 @@
       "description": "Type of ticket"
     },
     "status": {
-      "type": "string",
-      "enum": ["pending", "in_progress", "completed", "failed", "approved", "rejected"],
-      "description": "Current status of the ticket"
+      "description": "Current status of the ticket (legacy + stage2 compat)",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": ["in_progress", "completed", "approved", "rejected"],
+          "description": "Legacy-only statuses (pending/failed covered by stage2 enum)"
+        },
+        {
+          "type": "string",
+          "enum": ["pending", "running", "done", "failed", "blocked"],
+          "description": "Stage 2 status machine"
+        }
+      ]
     },
     "flow_id": {
       "type": "string",
@@ -95,9 +105,18 @@
           "format": "date-time"
         },
         "lease_expires": {
-          "type": "string",
-          "format": "date-time",
-          "description": "When the ticket lease expires"
+          "description": "When the ticket lease expires (legacy ISO date-time or stage2 epoch-ms)",
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "description": "Legacy ISO date-time"
+            },
+            {
+              "type": "number",
+              "description": "Stage 2 epoch milliseconds"
+            }
+          ]
         },
         "assigned_to": {
           "type": "string",
@@ -144,6 +163,13 @@
         "triage": {
           "type": "object",
           "description": "Complete decision object from TRIAGE worker (includes decision/information_needs)"
+        },
+        "tool_steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ToolStep"
+          },
+          "description": "M2-B.1: Ordered list of tool execution steps (RunnerCore input)"
         },
         "tool_policy": {
           "type": "object",
@@ -232,20 +258,68 @@
       "additionalProperties": true
     },
     "ToolVerdict": {
-      "type": "object",
       "description": "Three-state decision from TOOL phase",
-      "properties": {
-        "status": {
+      "oneOf": [
+        {
           "type": "string",
           "enum": ["PROCEED", "DEFER", "BLOCK"],
-          "description": "Decision status: PROCEED (continue to REPLY), DEFER (needs human review), BLOCK (reject)"
+          "description": "Legacy verdict string (Stage 2 compat)"
         },
-        "reason": {
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": ["PROCEED", "DEFER", "BLOCK"],
+              "description": "Decision status: PROCEED (continue to REPLY), DEFER (needs human review), BLOCK (reject)"
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 512,
+              "description": "Explanation for the verdict decision"
+            }
+          },
+          "required": ["status"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ToolStep": {
+      "type": "object",
+      "description": "M2-B.1: Single tool execution step (strict schema, no free-text)",
+      "properties": {
+        "tool_name": {
           "type": "string",
-          "description": "Explanation for the verdict decision"
+          "description": "Tool name (must be in allowlist: web_search, memory, filesystem)"
+        },
+        "args": {
+          "type": "object",
+          "description": "Tool-specific arguments (per-tool allowlist keys enforced by runtime validator)"
+        },
+        "budget": {
+          "type": "object",
+          "properties": {
+            "max_steps": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum number of steps before BUDGET_EXCEEDED"
+            },
+            "max_wall_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum wall clock time in milliseconds before RUN_TIMEOUT"
+            }
+          },
+          "additionalProperties": false,
+          "description": "Budget constraints (only max_steps/max_wall_ms; bytes limits handled by evidence policy)"
+        },
+        "save_as": {
+          "type": "string",
+          "description": "Optional evidence key for saving step output"
         }
       },
-      "additionalProperties": true
+      "required": ["tool_name"],
+      "additionalProperties": false
     }
   }
 }

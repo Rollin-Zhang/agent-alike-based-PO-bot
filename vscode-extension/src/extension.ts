@@ -106,20 +106,21 @@ async function runSelfTest(): Promise<void> {
         
         outputChannel.appendLine(`📡 Orchestrator URL: ${baseUrl}`);
         
-        // 提交診斷事件
-        outputChannel.appendLine('📤 Submitting diagnostic event...');
-        
-        const timestamp = new Date().toISOString();
+        // Phase A / NO_MCP-safe: deterministic contract self-test
+        // - Create a TRIAGE ticket via POST /events
+        // - Direct-fill via POST /v1/tickets/:id/fill (by=manual)
+        // - Poll GET /v1/tickets/:id until terminal, then validate metadata.final_outputs
+        outputChannel.appendLine('📤 Creating TRIAGE ticket via POST /events ...');
+
         const eventId = `self-test-${Date.now()}`;
-        const threadId = `thread-self-test-${Date.now()}`;
-        
         const event = {
-            type: 'diagnostic_qa',
+            type: 'thread_post',
+            source: 'vscode_self_test',
             event_id: eventId,
-            thread_id: threadId,
-            content: '請計算 123 + 456，答案只要數字，不要其他文字。',
-            actor: 'vscode_self_test',
-            timestamp
+            content: 'VS Code self-test (Phase A) deterministic direct fill',
+            features: {
+                engagement: { likes: 100, comments: 50 }
+            }
         };
         
         // 使用 fetch 提交事件
@@ -140,62 +141,148 @@ async function runSelfTest(): Promise<void> {
         
         outputChannel.appendLine(`✅ Event submitted, ticket ID: ${ticketId}`);
         
-        // 等待處理完成
-        outputChannel.appendLine('⏳ Waiting for processing...');
+        // Deterministic fill (no LLM required)
+        outputChannel.appendLine('🧾 Direct-filling TRIAGE ticket via /v1/tickets/:id/fill ...');
+
+        const fillResp = await fetch(`${baseUrl}/v1/tickets/${ticketId}/fill`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                outputs: {
+                    decision: 'APPROVE',
+                    short_reason: 'VS Code self-test direct fill',
+                    reply_strategy: 'standard',
+                    target_prompt_id: 'reply.standard'
+                },
+                by: 'manual'
+            })
+        });
+
+        if (!fillResp.ok) {
+            const txt = await fillResp.text();
+            throw new Error(`Failed to fill ticket: ${fillResp.status} ${fillResp.statusText} body=${txt}`);
+        }
+
+        // Poll until terminal
+        outputChannel.appendLine('⏳ Waiting for terminal status (done/failed/blocked)...');
         
-        const maxWaitTime = 30000; // 30 seconds
+        const maxWaitTime = 15000; // 15 seconds
         const pollInterval = 2000; // 2 seconds
         let elapsed = 0;
         
         while (elapsed < maxWaitTime) {
-            const ticketResponse = await fetch(`${baseUrl}/ticket/${ticketId}`);
+            const ticketResponse = await fetch(`${baseUrl}/v1/tickets/${ticketId}`);
             if (!ticketResponse.ok) {
                 throw new Error(`Failed to fetch ticket: ${ticketResponse.status}`);
             }
             
             const ticket = await ticketResponse.json();
-            
-            // 在 drafted 或 completed/approved 狀態皆可驗證
-            if (ticket.status === 'drafted' || ticket.status === 'completed' || ticket.status === 'approved') {
-                if (typeof ticket.draft === 'object' && ticket.draft !== null && 'content' in ticket.draft) {
-                    outputChannel.appendLine(`✅ Draft available (object)`);
-                    outputChannel.appendLine(`📄 Draft: "${ticket.draft.content}"`);
-                    outputChannel.appendLine(`🎯 Confidence: ${ticket.draft.confidence ?? 'N/A'}`);
 
-                    const draftText = String(ticket.draft.content).trim();
-                    if (draftText === '579') {
-                        outputChannel.appendLine('🎉 Self-test PASSED! Answer is correct.');
-                        vscode.window.showInformationMessage('✅ PO Bot Self-test passed!');
-                    } else {
-                        outputChannel.appendLine(`❌ Self-test FAILED! Expected "579", got "${draftText}"`);
-                        vscode.window.showErrorMessage('❌ PO Bot Self-test failed!');
-                    }
-                    return;
-                }
-                if (typeof ticket.draft === 'string') {
-                    outputChannel.appendLine(`✅ Draft available (string)`);
-                    outputChannel.appendLine(`📄 Draft: "${ticket.draft}"`);
-                    const draftText = ticket.draft.trim();
-                    if (draftText === '579') {
-                        outputChannel.appendLine('🎉 Self-test PASSED! Answer is correct.');
-                        vscode.window.showInformationMessage('✅ PO Bot Self-test passed!');
-                    } else {
-                        outputChannel.appendLine(`❌ Self-test FAILED! Expected "579", got "${draftText}"`);
-                        vscode.window.showErrorMessage('❌ PO Bot Self-test failed!');
-                    }
-                    return;
-                }
+            const status = String(ticket.status || '');
+            if (status === 'done') {
+                const finalOutputs = ticket?.metadata?.final_outputs;
+                const decision = finalOutputs?.decision;
+                outputChannel.appendLine(`✅ Terminal status: done`);
+                outputChannel.appendLine(`📦 final_outputs.decision: ${decision ?? 'N/A'}`);
 
-                outputChannel.appendLine('❌ Status indicates drafted/completed but no usable draft found');
-                vscode.window.showErrorMessage('❌ Self-test failed: No draft generated');
-                return;
-            } else if (ticket.status === 'failed' || ticket.status === 'rejected') {
-                outputChannel.appendLine(`❌ Processing failed with status: ${ticket.status}`);
-                vscode.window.showErrorMessage('❌ Self-test failed: Processing failed');
+                if (decision === 'APPROVE') {
+                    outputChannel.appendLine('✅ TRIAGE contract + fill path OK.');
+
+                    // Bonus target for Phase A: wait for derived REPLY ticket to reach terminal status
+                    outputChannel.appendLine('🔎 Looking for derived REPLY ticket (triage_reference_id match) ...');
+
+                    const findReplyTicketId = async (triageId: string, timeoutMs: number): Promise<string | null> => {
+                        const started = Date.now();
+                        while (Date.now() - started < timeoutMs) {
+                            const listResp = await fetch(`${baseUrl}/v1/tickets?limit=10000`);
+                            if (listResp.ok) {
+                                const listJson: any = await listResp.json();
+                                const tickets: any[] = Array.isArray(listJson)
+                                    ? listJson
+                                    : Array.isArray(listJson?.tickets)
+                                        ? listJson.tickets
+                                        : Array.isArray(listJson?.data)
+                                            ? listJson.data
+                                            : [];
+
+                                const reply = tickets.find((t: any) =>
+                                    (t?.metadata?.kind === 'REPLY') && (t?.metadata?.triage_reference_id === triageId)
+                                );
+                                if (reply?.id) {
+                                    return String(reply.id);
+                                }
+                            }
+
+                            await new Promise(resolve => setTimeout(resolve, 500));
+                        }
+                        return null;
+                    };
+
+                    const replyTicketId = await findReplyTicketId(ticketId, 20000);
+                    if (!replyTicketId) {
+                        outputChannel.appendLine('❌ Could not find derived REPLY ticket within timeout');
+                        vscode.window.showErrorMessage('❌ PO Bot Self-test failed: REPLY ticket not found');
+                        return;
+                    }
+
+                    outputChannel.appendLine(`✅ Found REPLY ticket: ${replyTicketId}`);
+                    outputChannel.appendLine('⏳ Waiting for REPLY terminal status (done/blocked/failed)...');
+
+                    const maxWaitReplyMs = 45000;
+                    let replyElapsed = 0;
+                    while (replyElapsed < maxWaitReplyMs) {
+                        const replyResp = await fetch(`${baseUrl}/v1/tickets/${replyTicketId}`);
+                        if (!replyResp.ok) {
+                            throw new Error(`Failed to fetch REPLY ticket: ${replyResp.status}`);
+                        }
+                        const replyTicket = await replyResp.json();
+                        const replyStatus = String(replyTicket?.status || '');
+
+                        if (replyStatus === 'done') {
+                            outputChannel.appendLine('✅ REPLY terminal status: done');
+                            outputChannel.appendLine('🎉 Self-test PASSED! TRIAGE + REPLY reached terminal states.');
+                            vscode.window.showInformationMessage('✅ PO Bot Self-test passed!');
+                            return;
+                        }
+
+                        if (replyStatus === 'blocked') {
+                            outputChannel.appendLine('⚠️ REPLY terminal status: blocked');
+                            outputChannel.appendLine(`📦 REPLY metadata: ${JSON.stringify(replyTicket?.metadata || {}, null, 2)}`);
+                            outputChannel.appendLine('🎉 Self-test PASSED (with warning): REPLY reached terminal state (blocked).');
+                            vscode.window.showWarningMessage('⚠️ PO Bot Self-test passed (REPLY blocked)');
+                            return;
+                        }
+
+                        if (replyStatus === 'failed') {
+                            outputChannel.appendLine('❌ REPLY terminal status: failed');
+                            outputChannel.appendLine(`📦 REPLY metadata: ${JSON.stringify(replyTicket?.metadata || {}, null, 2)}`);
+                            vscode.window.showErrorMessage('❌ PO Bot Self-test failed: REPLY failed');
+                            return;
+                        }
+
+                        outputChannel.appendLine(`⏱️  REPLY Status: ${replyStatus}, waiting...`);
+                        await new Promise(resolve => setTimeout(resolve, pollInterval));
+                        replyElapsed += pollInterval;
+                    }
+
+                    outputChannel.appendLine('⏰ REPLY wait timed out');
+                    vscode.window.showWarningMessage('⚠️ PO Bot Self-test timed out waiting for REPLY');
+                    return;
+                } else {
+                    outputChannel.appendLine(`❌ Self-test FAILED! Expected decision=APPROVE, got ${String(decision)}`);
+                    vscode.window.showErrorMessage('❌ PO Bot Self-test failed!');
+                }
                 return;
             }
-            
-            outputChannel.appendLine(`⏱️  Status: ${ticket.status}, waiting...`);
+
+            if (status === 'failed' || status === 'blocked') {
+                outputChannel.appendLine(`❌ Terminal status: ${status}`);
+                outputChannel.appendLine(`📦 metadata: ${JSON.stringify(ticket?.metadata || {}, null, 2)}`);
+                vscode.window.showErrorMessage(`❌ PO Bot Self-test failed: ${status}`);
+                return;
+            }
+
+            outputChannel.appendLine(`⏱️  Status: ${status}, waiting...`);
             await new Promise(resolve => setTimeout(resolve, pollInterval));
             elapsed += pollInterval;
         }

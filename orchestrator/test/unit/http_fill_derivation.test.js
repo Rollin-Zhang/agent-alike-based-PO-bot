@@ -194,7 +194,7 @@ async function testHttpFillDerivation() {
     console.log('[Test] Performing first fill...');
     const fillResp1 = await httpPost(port, `/v1/tickets/${triageId}/fill`, {
       outputs: { decision: 'APPROVE', reason: 'HTTP test approval' },
-      by: 'test-runner'
+      by: 'http_fill'
     });
 
     assert.strictEqual(fillResp1.status, 200, 'First fill should succeed');
@@ -214,15 +214,8 @@ async function testHttpFillDerivation() {
     assert.ok(triageTicket1.derived, 'Triage ticket should have derived object');
     assert.ok(triageTicket1.derived.tool_ticket_id, 'Triage ticket should have tool_ticket_id');
     
-    // === Verify Mirror (Transition Period) ===
-    // During transition, both canonical and legacy locations should have the same value
-    assert.ok(triageTicket1.metadata.derived, 'Should have legacy metadata.derived (mirror)');
-    assert.strictEqual(
-      triageTicket1.metadata.derived.tool_ticket_id,
-      triageTicket1.derived.tool_ticket_id,
-      'Mirror should match canonical location'
-    );
-    console.log('[Test] Mirror verified: derived and metadata.derived match');
+    // M2-C.2: legacy metadata.derived mirror is removed
+    assert.ok(!triageTicket1.metadata.derived, 'Should not write legacy metadata.derived');
     
     const toolId = triageTicket1.derived.tool_ticket_id;
     console.log(`[Test] TOOL ticket derived: ${toolId}`);
@@ -244,7 +237,7 @@ async function testHttpFillDerivation() {
     console.log('[Test] Performing second fill (testing idempotency)...');
     const fillResp2 = await httpPost(port, `/v1/tickets/${triageId}/fill`, {
       outputs: { decision: 'APPROVE', reason: 'Second approval' },
-      by: 'test-runner'
+      by: 'http_fill'
     });
 
     assert.strictEqual(fillResp2.status, 200, 'Second fill should succeed');

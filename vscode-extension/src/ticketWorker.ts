@@ -374,10 +374,15 @@ class TicketProcessor {
       ...parsed
     };
 
+    const lease_owner = (this.t.metadata as any)?.lease_owner;
+    const lease_token = (this.t.metadata as any)?.lease_token;
+
     await this.api.fillTicketV1(this.getTicketId(), {
       outputs,
       by: this.formatModelId(modelResp),
-      tokens: this.extractTokens(modelResp)
+      tokens: this.extractTokens(modelResp),
+      lease_owner,
+      lease_token
     });
 
     return { status: 'drafted' };
@@ -522,7 +527,9 @@ class TicketProcessor {
         process_trace: processTrace
       },
       by: 'vscode-worker-reviewed',
-      tokens: { input: 0, output: 0 } 
+      tokens: { input: 0, output: 0 },
+      lease_owner: (this.t.metadata as any)?.lease_owner,
+      lease_token: (this.t.metadata as any)?.lease_token
     });
 
     return { status: 'drafted' };

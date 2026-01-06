@@ -7,12 +7,18 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "test": "jest",
+    "strict:check": "node scripts/strict_gate_check.js",
+    "accept:no_mcp": "node scripts/accept_no_mcp.js",
+    "accept:real_mcp": "node scripts/accept_real_mcp.js",
+    "accept:m2": "node scripts/accept_m2.js",
     "ingest:sample": "node ingest/run_ingest.js --file=ingest/sample_posts.json",
     "ingest:file": "node ingest/run_ingest.js --file=$FILE",
     "ingest:url": "node ingest/run_ingest.js --url=$URL"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.1",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
     "axios": "^1.13.2",
     "body-parser": "^2.2.1",
     "cors": "^2.8.5",
