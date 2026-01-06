@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "manifest_self_hash.v1.schema.json",
+  "title": "Manifest Self Hash v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["algo", "canonicalizer", "value"],
+  "properties": {
+    "algo": { "type": "string", "const": "sha256" },
+    "canonicalizer": { "type": "string", "const": "canonicalJsonStringify/v1" },
+    "value": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

@@ -6,6 +6,7 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const Ajv = require('ajv');
@@ -100,10 +101,12 @@ async function testPhaseEModeSnapshotGoldenSchemaLock() {
   });
 
   // Inject via the single writer entry point
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'phase_e_golden_'));
   writeRunReportV1({
-    filePath: path.join(__dirname, '._tmp_phase_e_golden_run_report_v1.json'),
+    filePath: path.join(tmpDir, 'run_report_v1.json'),
     reportV1: report,
-    mode_snapshot
+    mode_snapshot,
+    run_id: 'phase_e_golden_12345678'
   });
 
   const ok = validate(report);

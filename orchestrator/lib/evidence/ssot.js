@@ -1,3 +1,33 @@
+'use strict';
+
+const EVIDENCE_REASON_RUNTIME = Object.freeze({
+  // Runtime stable codes (allow-list). Keep low-cardinality.
+  LEASE_OWNER_MISMATCH: 'lease_owner_mismatch'
+});
+
+const EVIDENCE_REASON_INTEGRITY = Object.freeze({
+  ARTIFACT_SHA_MISMATCH: 'artifact_sha_mismatch',
+  ARTIFACT_MISSING: 'artifact_missing',
+  MANIFEST_SCHEMA_INVALID: 'manifest_schema_invalid',
+  MODE_SNAPSHOT_REF_NOT_LISTED: 'mode_snapshot_ref_not_listed',
+  DETAILS_REF_NOT_LISTED: 'details_ref_not_listed',
+  MANIFEST_SELF_INTEGRITY_FAILED: 'manifest_self_integrity_failed',
+  DUPLICATE_ARTIFACT_PATH: 'duplicate_artifact_path',
+  DUPLICATE_CHECK_NAME: 'duplicate_check_name'
+});
+
+function isEvidenceReason(code) {
+  const c = String(code || '');
+  if (!c) return false;
+  return Object.values(EVIDENCE_REASON_RUNTIME).includes(c) ||
+    Object.values(EVIDENCE_REASON_INTEGRITY).includes(c);
+}
+
+module.exports = {
+  EVIDENCE_REASON_RUNTIME,
+  EVIDENCE_REASON_INTEGRITY,
+  isEvidenceReason
+};
 /**
  * Evidence SSOT (Single Source of Truth)
  *
