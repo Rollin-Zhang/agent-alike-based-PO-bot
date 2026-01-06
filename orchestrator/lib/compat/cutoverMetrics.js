@@ -74,9 +74,28 @@ function createCutoverMetrics() {
       return out;
     }
 
+    const countersOut = toObj(by_event_field, 2);
+    const bySourceOut = toObj(by_event_field_source, 3);
+
+    // Test-only deterministic injection (Phase E Level 2)
+    // - Do not affect production behavior; only influences observability snapshot.
+    if (process.env.NODE_ENV === 'test' && String(process.env.CANONICAL_MISSING_FORCE) === '1') {
+      const hit = countersOut.find((r) => r.event_type === 'canonical_missing' && r.field === 'tool_verdict');
+      if (hit) {
+        hit.count = Number(hit.count || 0) + 1;
+      } else {
+        countersOut.push({ event_type: 'canonical_missing', field: 'tool_verdict', count: 1 });
+        countersOut.sort((a, b) => {
+          if (a.event_type !== b.event_type) return a.event_type.localeCompare(b.event_type);
+          if (a.field !== b.field) return a.field.localeCompare(b.field);
+          return (a.source || '').localeCompare(b.source || '');
+        });
+      }
+    }
+
     return {
-      counters: toObj(by_event_field, 2),
-      counters_by_source: toObj(by_event_field_source, 3)
+      counters: countersOut,
+      counters_by_source: bySourceOut
     };
   }
 

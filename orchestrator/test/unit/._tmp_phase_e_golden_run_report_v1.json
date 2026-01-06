@@ -1,0 +1,67 @@
+{
+  "version": "v1",
+  "run_id": "15dfff4b-ddb5-43d2-8694-235c3a31fc15",
+  "as_of": "2026-01-06T12:52:07.422Z",
+  "ticket_id": "phase_e_golden_schema_lock",
+  "retry_policy_id": "v1_default",
+  "max_attempts": 1,
+  "terminal_status": "ok",
+  "primary_failure_code": null,
+  "started_at": "2026-01-06T11:46:40.000Z",
+  "ended_at": "2026-01-06T11:46:40.000Z",
+  "duration_ms": 0,
+  "step_reports": [],
+  "attempt_events": [],
+  "mode_snapshot": {
+    "as_of": "2026-01-06T12:52:07.422Z",
+    "env": {
+      "NO_MCP": true,
+      "enableToolDerivation": true,
+      "toolOnlyMode": false,
+      "enableTicketSchemaValidation": true
+    },
+    "cutover": {
+      "cutover_until_ms": 1767700060000,
+      "env_source": "CUTOVER_UNTIL_MS",
+      "policy_mode": "pre_cutover",
+      "metrics": {
+        "counters": [
+          {
+            "event_type": "canonical_missing",
+            "field": "tool_verdict",
+            "count": 0
+          },
+          {
+            "event_type": "cutover_violation",
+            "field": "tool_verdict",
+            "count": 0
+          },
+          {
+            "event_type": "legacy_read",
+            "field": "tool_verdict",
+            "count": 0
+          }
+        ],
+        "counters_by_source": []
+      },
+      "gate": {
+        "ok": true,
+        "mode": "post_cutover",
+        "counts": {
+          "canonical_missing": 0,
+          "cutover_violation": 0,
+          "legacy_read": 0
+        },
+        "reasons": []
+      }
+    },
+    "readiness_summary": {
+      "deps_ready": false,
+      "missing_dep_codes": [
+        "memory",
+        "web_search"
+      ],
+      "total_missing": 2
+    }
+  }
+}

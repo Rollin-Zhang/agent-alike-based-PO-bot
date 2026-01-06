@@ -14,6 +14,8 @@ const {
 } = require('../lib/run_report/createRunReportV1');
 const { createStepReportV1 } = require('../lib/run_report/createStepReportV1');
 const { mapToStableCode } = require('../lib/run_report/stable_codes');
+const { buildModeSnapshotFromHttp } = require('../lib/run_report/modeSnapshot');
+const { writeRunReportV1 } = require('../lib/run_report/writeRunReportV1');
 
 function nowIso() {
   return new Date().toISOString();
@@ -110,6 +112,9 @@ async function main() {
   const artifacts = {};
   let exitCode = 0;
 
+  let lastHealthBody = null;
+  let lastMetricsBody = null;
+
   const envOverrides = {
     NO_MCP: 'false',
     RUN_REAL_MCP_TESTS: 'true',
@@ -121,15 +126,19 @@ async function main() {
 
   const { baseUrl, stop, logsBuffer, port } = await startServerWithEnv(envOverrides);
 
+  const serverEnv = { ...process.env, ...envOverrides, ORCHESTRATOR_PORT: String(port) };
+
   try {
     const metricsBefore = await httpJson(baseUrl, 'GET', '/metrics');
     writeJson(path.join(runDir, 'metrics_before.json'), metricsBefore);
     artifacts.metrics_before = 'metrics_before.json';
+    lastMetricsBody = metricsBefore.body && typeof metricsBefore.body === 'object' ? metricsBefore.body : null;
 
     // Wait for required deps ready
     const healthReady = await waitForRequiredReady(baseUrl);
     writeJson(path.join(runDir, 'health_ready.json'), healthReady);
     artifacts.health_ready = 'health_ready.json';
+    lastHealthBody = healthReady.body && typeof healthReady.body === 'object' ? healthReady.body : null;
 
     // Tool execute (B1): call memory server via HTTP /v1/tools/execute
     // Note: /v1/tools/execute gating is conservative; required deps must be ready.
@@ -188,12 +197,21 @@ async function main() {
       attempt_events: attemptEvents
     });
 
-    writeJson(path.join(runDir, 'run_report_v1.json'), runReportV1);
+    writeRunReportV1({
+      filePath: path.join(runDir, 'run_report_v1.json'),
+      reportV1: runReportV1,
+      mode_snapshot: buildModeSnapshotFromHttp({
+        env: serverEnv,
+        healthBody: lastHealthBody,
+        metricsBody: lastMetricsBody
+      })
+    });
     artifacts.run_report_v1 = 'run_report_v1.json';
 
     const metricsAfter = await httpJson(baseUrl, 'GET', '/metrics');
     writeJson(path.join(runDir, 'metrics_after.json'), metricsAfter);
     artifacts.metrics_after = 'metrics_after.json';
+    lastMetricsBody = metricsAfter.body && typeof metricsAfter.body === 'object' ? metricsAfter.body : lastMetricsBody;
 
     const readinessBefore = metricsBefore.body?.readiness || {};
     const readinessAfter = metricsAfter.body?.readiness || {};
@@ -248,7 +266,15 @@ async function main() {
         step_reports: [],
         attempt_events: attemptEvents
       });
-      writeJson(path.join(runDir, 'run_report_v1.json'), runReportV1);
+      writeRunReportV1({
+        filePath: path.join(runDir, 'run_report_v1.json'),
+        reportV1: runReportV1,
+        mode_snapshot: buildModeSnapshotFromHttp({
+          env: serverEnv,
+          healthBody: lastHealthBody,
+          metricsBody: lastMetricsBody
+        })
+      });
       artifacts.run_report_v1 = 'run_report_v1.json';
     } catch {
       // ignore

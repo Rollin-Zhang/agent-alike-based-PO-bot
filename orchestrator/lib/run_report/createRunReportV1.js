@@ -49,7 +49,7 @@ function createRunReportV1(params = {}) {
   const run_id = uuidv4();
   const as_of = isoNow();
 
-  return {
+  const report = {
     version: RUN_REPORT_VERSION,
     run_id,
     as_of,
@@ -64,6 +64,8 @@ function createRunReportV1(params = {}) {
     step_reports: Array.isArray(step_reports) ? step_reports : [],
     attempt_events: Array.isArray(attempt_events) ? attempt_events : []
   };
+
+  return report;
 }
 
 function appendAttemptEvent(reportV1, event) {

@@ -51,6 +51,114 @@
           "message": { "type": ["string", "null"] }
         }
       }
+    },
+    "mode_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["as_of", "env", "cutover", "readiness_summary"],
+      "properties": {
+        "as_of": { "type": "string", "format": "date-time" },
+        "env": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "NO_MCP",
+            "enableToolDerivation",
+            "toolOnlyMode",
+            "enableTicketSchemaValidation"
+          ],
+          "properties": {
+            "NO_MCP": { "type": "boolean" },
+            "enableToolDerivation": { "type": "boolean" },
+            "toolOnlyMode": { "type": "boolean" },
+            "enableTicketSchemaValidation": { "type": "boolean" }
+          }
+        },
+        "cutover": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cutover_until_ms", "env_source", "policy_mode", "metrics", "gate"],
+          "properties": {
+            "cutover_until_ms": { "type": ["integer", "null"] },
+            "env_source": { "type": ["string", "null"] },
+            "policy_mode": { "type": "string", "enum": ["pre_cutover", "post_cutover"] },
+            "metrics": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["counters", "counters_by_source"],
+              "properties": {
+                "counters": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["event_type", "field", "count"],
+                    "properties": {
+                      "event_type": { "type": "string" },
+                      "field": { "type": "string" },
+                      "count": { "type": "number", "minimum": 0 }
+                    }
+                  }
+                },
+                "counters_by_source": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["event_type", "field", "count", "source"],
+                    "properties": {
+                      "event_type": { "type": "string" },
+                      "field": { "type": "string" },
+                      "count": { "type": "number", "minimum": 0 },
+                      "source": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            },
+            "gate": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["ok", "mode", "counts", "reasons"],
+              "properties": {
+                "ok": { "type": "boolean" },
+                "mode": { "type": "string", "enum": ["pre_cutover", "post_cutover"] },
+                "counts": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["canonical_missing", "cutover_violation", "legacy_read"],
+                  "properties": {
+                    "canonical_missing": { "type": "number", "minimum": 0 },
+                    "cutover_violation": { "type": "number", "minimum": 0 },
+                    "legacy_read": { "type": "number", "minimum": 0 }
+                  }
+                },
+                "reasons": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "readiness_summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["deps_ready", "missing_dep_codes", "total_missing"],
+          "properties": {
+            "deps_ready": { "type": "boolean" },
+            "missing_dep_codes": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "total_missing": { "type": "integer", "minimum": 0 },
+            "providers_unavailable": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      }
     }
   }
 }

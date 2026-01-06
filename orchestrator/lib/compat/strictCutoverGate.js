@@ -7,6 +7,14 @@
 
 const { createCutoverPolicy } = require('./CutoverPolicy');
 
+const STRICT_GATE_REASONS = Object.freeze({
+  FORCED_ON: 'forced_on',
+  FORCED_OFF: 'forced_off',
+  CANONICAL_MISSING_NONZERO: 'canonical_missing_nonzero',
+  CUTOVER_VIOLATION_NONZERO: 'cutover_violation_nonzero',
+  LEGACY_READ_POST_CUTOVER_NONZERO: 'legacy_read_post_cutover_nonzero'
+});
+
 function getCount(metricsSnapshot, event_type, field) {
   const rows = metricsSnapshot && Array.isArray(metricsSnapshot.counters)
     ? metricsSnapshot.counters
@@ -28,7 +36,8 @@ function canEnableStrict(options = {}) {
   const {
     nowMs = Date.now(),
     policy = createCutoverPolicy(),
-    metricsSnapshot
+    metricsSnapshot,
+    env = process.env
   } = options;
 
   const mode = policy.mode(nowMs);
@@ -38,9 +47,30 @@ function canEnableStrict(options = {}) {
   const legacy_read = getCount(metricsSnapshot, 'legacy_read', 'tool_verdict');
 
   const reasons = [];
-  if (canonical_missing !== 0) reasons.push('canonical_missing_nonzero');
-  if (cutover_violation !== 0) reasons.push('cutover_violation_nonzero');
-  if (mode === 'post_cutover' && legacy_read !== 0) reasons.push('legacy_read_post_cutover_nonzero');
+  if (canonical_missing !== 0) reasons.push(STRICT_GATE_REASONS.CANONICAL_MISSING_NONZERO);
+  if (cutover_violation !== 0) reasons.push(STRICT_GATE_REASONS.CUTOVER_VIOLATION_NONZERO);
+  if (mode === 'post_cutover' && legacy_read !== 0) reasons.push(STRICT_GATE_REASONS.LEGACY_READ_POST_CUTOVER_NONZERO);
+
+  // Test-only deterministic override
+  if (env && env.NODE_ENV === 'test') {
+    const force = env.STRICT_GATE_FORCE ? String(env.STRICT_GATE_FORCE) : null;
+    if (force === 'on') {
+      return {
+        ok: true,
+        mode,
+        counts: { canonical_missing, cutover_violation, legacy_read },
+        reasons: [STRICT_GATE_REASONS.FORCED_ON, ...reasons]
+      };
+    }
+    if (force === 'off') {
+      return {
+        ok: false,
+        mode,
+        counts: { canonical_missing, cutover_violation, legacy_read },
+        reasons: [STRICT_GATE_REASONS.FORCED_OFF, ...reasons]
+      };
+    }
+  }
 
   return {
     ok: reasons.length === 0,
@@ -51,5 +81,6 @@ function canEnableStrict(options = {}) {
 }
 
 module.exports = {
+  STRICT_GATE_REASONS,
   canEnableStrict
 };

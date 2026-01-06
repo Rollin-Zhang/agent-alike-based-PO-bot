@@ -11,6 +11,8 @@ const { HttpToolsExecuteGatewayAdapter } = require('../lib/tool_runner/ToolGatew
 const { bridgeToolSteps } = require('../lib/tool_runner/b_script_bridge');
 const { depsForToolName } = require('../lib/readiness/ssot');
 const { mapRunReportStatusToVerdict } = require('../lib/tool_runner/b_script_executor_ssot');
+const { buildModeSnapshotFromHttp } = require('../lib/run_report/modeSnapshot');
+const { writeRunReportV1 } = require('../lib/run_report/writeRunReportV1');
 
 function nowIso() {
   return new Date().toISOString();
@@ -147,6 +149,9 @@ async function main() {
   const artifacts = {};
   let exitCode = 0;
 
+  let lastHealthBody = null;
+  let lastMetricsBody = null;
+
   const env = {
     ...process.env,
     NO_MCP: 'false',
@@ -157,6 +162,7 @@ async function main() {
   };
 
   const { baseUrl, stop, logsBuffer, port } = await startServerWithEnv(env);
+  const serverEnv = { ...env, ORCHESTRATOR_PORT: String(port) };
 
   const ids = {
     triage_ticket_id: null,
@@ -168,6 +174,7 @@ async function main() {
     const health = await httpJson(baseUrl, 'GET', '/health');
     writeJson(path.join(runDir, 'health.json'), health);
     artifacts.health = 'health.json';
+    lastHealthBody = health.body && typeof health.body === 'object' ? health.body : null;
 
     const depsSnapshot = {
       ...(health.body?.required || {}),
@@ -177,6 +184,7 @@ async function main() {
     const metricsBefore = await httpJson(baseUrl, 'GET', '/metrics');
     writeJson(path.join(runDir, 'metrics_before.json'), metricsBefore);
     artifacts.metrics_before = 'metrics_before.json';
+    lastMetricsBody = metricsBefore.body && typeof metricsBefore.body === 'object' ? metricsBefore.body : null;
 
     // Trigger event
     const eventId = `phaseB2-${Date.now()}`;
@@ -263,7 +271,15 @@ async function main() {
     writeJson(path.join(runDir, 'runnercore_run_report.json'), runReport);
     artifacts.runnercore_run_report = 'runnercore_run_report.json';
 
-    writeJson(path.join(runDir, 'run_report_v1.json'), runReportV1);
+    writeRunReportV1({
+      filePath: path.join(runDir, 'run_report_v1.json'),
+      reportV1: runReportV1,
+      mode_snapshot: buildModeSnapshotFromHttp({
+        env: serverEnv,
+        healthBody: lastHealthBody,
+        metricsBody: lastMetricsBody
+      })
+    });
     artifacts.run_report_v1 = 'run_report_v1.json';
 
     const outputs = {
@@ -309,6 +325,7 @@ async function main() {
     const metricsAfter = await httpJson(baseUrl, 'GET', '/metrics');
     writeJson(path.join(runDir, 'metrics_after.json'), metricsAfter);
     artifacts.metrics_after = 'metrics_after.json';
+    lastMetricsBody = metricsAfter.body && typeof metricsAfter.body === 'object' ? metricsAfter.body : lastMetricsBody;
 
     const countersBefore = metricsBefore.body?.readiness?.required_unavailable_total || {};
     const countersAfter = metricsAfter.body?.readiness?.required_unavailable_total || {};

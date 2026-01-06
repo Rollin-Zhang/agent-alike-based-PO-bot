@@ -113,7 +113,8 @@ async function main() {
   const result = canEnableStrict({
     nowMs,
     policy,
-    metricsSnapshot: json.cutover.metrics
+    metricsSnapshot: json.cutover.metrics,
+    env: process.env
   });
 
   const out = {
