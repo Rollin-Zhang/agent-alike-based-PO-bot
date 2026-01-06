@@ -67,9 +67,6 @@ function isProbeStepFail(stepReport) {
  * - attempt_events[*].code 可使用這些 codes 追溯內部嘗試
  */
 const PROBE_STEP_CODES = Object.freeze({
-  // Security probe specific (access control)
-  FS_PATH_NOT_WHITELISTED: 'FS_PATH_NOT_WHITELISTED', // 只能出現在 attempt_events，不得成為 StepReport.code
-  
   // Access probe specific
   FS_LIST_LOGS_FAILED: 'FS_LIST_LOGS_FAILED',
   FS_ACCESS_DENIED: 'FS_ACCESS_DENIED',
@@ -97,6 +94,8 @@ const PROBE_STEP_CODES = Object.freeze({
  * Probe attempt_event codes（只用於 attempt_events，不得作為 StepReport.code）
  */
 const PROBE_ATTEMPT_CODES = Object.freeze({
+  // Security probe attempt (access control)
+  FS_PATH_NOT_WHITELISTED: 'FS_PATH_NOT_WHITELISTED',
   PROBE_SKIPPED_NO_MCP: 'PROBE_SKIPPED_NO_MCP'
 });
 
@@ -117,7 +116,6 @@ function isProbeCode(code) {
  */
 const PROBE_CODE_TO_STATUS = Object.freeze({
   // blocked
-  [PROBE_STEP_CODES.FS_PATH_NOT_WHITELISTED]: 'blocked',
   [PROBE_STEP_CODES.FS_ACCESS_DENIED]: 'blocked',
   [PROBE_STEP_CODES.SEARCH_PROBE_INVALID_SHAPE]: 'blocked',
   [PROBE_STEP_CODES.MEMORY_ACCESS_DENIED]: 'blocked',
@@ -171,6 +169,11 @@ function validateAttemptEvent(event) {
   // code 必須是 string 或 null
   if (event.code !== null && typeof event.code !== 'string') {
     return { valid: false, message: 'code must be string or null' };
+  }
+
+  // code（若非 null）必須屬於 Probe namespace，避免任意 code 混入
+  if (event.code !== null && !isProbeCode(event.code)) {
+    return { valid: false, message: `code must be a probe namespace code: ${event.code}` };
   }
   
   // duration_ms 必須是非負數
