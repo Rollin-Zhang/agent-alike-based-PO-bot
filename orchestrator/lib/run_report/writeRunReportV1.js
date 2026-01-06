@@ -57,6 +57,12 @@ function writeRunReportV1(options = {}) {
   const runId = typeof run_id === 'string' && run_id ? run_id : path.basename(runDir);
   const runReportFilename = path.basename(filePath);
 
+  // Policy: disallow run_id overwrite unless explicitly allowed (test-only or debug)
+  const allowOverwrite = process.env.ALLOW_RUN_ID_OVERWRITE === '1';
+  if (!allowOverwrite && fs.existsSync(filePath)) {
+    throw new Error(`run_id already exists and overwrite is not allowed: ${runId}`);
+  }
+
   const startedAtMs = Date.now();
 
   // Atomic write (best-effort): write to a unique temp file in the same dir, then rename.
@@ -69,6 +75,21 @@ function writeRunReportV1(options = {}) {
   const tmpPath = path.join(runDir, tmpName);
 
   fs.writeFileSync(tmpPath, payload, 'utf8');
+
+  // Test-only barrier: pause before rename to allow race testing
+  if (process.env.NODE_ENV === 'test' && process.env.EVIDENCE_WRITE_BARRIER === 'before_rename') {
+    const barrierFile = path.join(runDir, '.barrier_before_rename');
+    fs.writeFileSync(barrierFile, Date.now().toString(), 'utf8');
+    // Wait for barrier release (polling with timeout)
+    const startMs = Date.now();
+    while (fs.existsSync(barrierFile) && Date.now() - startMs < 10000) {
+      // Sleep briefly to avoid busy wait
+      const sleepMs = 50;
+      const sleepStart = Date.now();
+      while (Date.now() - sleepStart < sleepMs) { /* busy wait */ }
+    }
+  }
+
   fs.renameSync(tmpPath, filePath);
 
   try {

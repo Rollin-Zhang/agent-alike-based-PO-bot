@@ -162,6 +162,11 @@ function writeEvidenceManifestV1(options = {}) {
   const normalizedArtifacts = normalizeArtifacts(artifacts);
   const normalizedChecks = normalizeChecks(checks);
 
+  // Test-only failure injection (after mkdir but before any writes)
+  if (process.env.NODE_ENV === 'test' && process.env.EVIDENCE_MANIFEST_FORCE_FAIL === '1') {
+    throw new Error('EVIDENCE_MANIFEST_FORCE_FAIL: simulated failure');
+  }
+
   // Ensure manifest self artifact entry is present (sha256=null per spec).
   const hasSelf = normalizedArtifacts.some((a) => a.kind === 'evidence_manifest_v1' && a.path === MANIFEST_FILENAME);
   if (!hasSelf) {

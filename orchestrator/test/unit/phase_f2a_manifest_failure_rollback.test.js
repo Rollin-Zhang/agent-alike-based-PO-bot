@@ -33,18 +33,27 @@ async function testPhaseF2ManifestFailureRollback() {
     attempt_events: []
   });
 
-  // Test 1: Invalid run_id (too short) should fail and rollback
+  // Test 1: Simulated manifest write failure (real-world scenario)
   const runReportPath = path.join(runDir, 'run_report_v1.json');
   let caughtError = false;
 
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalEnv = process.env.EVIDENCE_MANIFEST_FORCE_FAIL;
   try {
-    writeRunReportV1({ filePath: runReportPath, reportV1: report, run_id: 'short' });
+    process.env.NODE_ENV = 'test';
+    process.env.EVIDENCE_MANIFEST_FORCE_FAIL = '1';
+    writeRunReportV1({ filePath: runReportPath, reportV1: report, run_id: 'run_fail_12345678' });
   } catch (err) {
     caughtError = true;
-    assert.ok(err.message.includes('run_id'), 'Error should mention run_id');
+    assert.ok(err.message.includes('EVIDENCE_MANIFEST_FORCE_FAIL'), 'Error should be from forced failure');
+  } finally {
+    if (originalNodeEnv !== undefined) process.env.NODE_ENV = originalNodeEnv;
+    else delete process.env.NODE_ENV;
+    if (originalEnv !== undefined) process.env.EVIDENCE_MANIFEST_FORCE_FAIL = originalEnv;
+    else delete process.env.EVIDENCE_MANIFEST_FORCE_FAIL;
   }
 
-  assert.ok(caughtError, 'Should throw error for invalid run_id');
+  assert.ok(caughtError, 'Should throw error for manifest write failure');
   
   // Verify no orphan files remain
   assert.ok(!fs.existsSync(runReportPath), 'run_report_v1.json should be rolled back');
@@ -58,6 +67,11 @@ async function testPhaseF2ManifestFailureRollback() {
   assert.ok(fs.existsSync(runReportPath), 'run_report_v1.json should exist after valid write');
   assert.ok(fs.existsSync(path.join(runDir, 'evidence_manifest_v1.json')), 'manifest should exist after valid write');
   assert.ok(fs.existsSync(path.join(runDir, 'manifest_self_hash_v1.json')), 'self-hash should exist after valid write');
+
+  // Test 3: Verify no *.tmp residual files remain (atomic rename verification)
+  const files = fs.readdirSync(runDir);
+  const tmpFiles = files.filter((f) => f.includes('.tmp'));
+  assert.strictEqual(tmpFiles.length, 0, `Should not leave any .tmp files, found: ${tmpFiles.join(', ')}`);
 
   console.log('[Test] testPhaseF2ManifestFailureRollback: PASS ✓');
   return true;

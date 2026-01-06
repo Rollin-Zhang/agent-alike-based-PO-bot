@@ -1,6 +1,6 @@
 /**
- * Phase F2 isolated test runner
- * Usage: node test/unit/run_phase_f2.js
+ * Phase F2A isolated test runner (Writer-layer concurrency + failure modes)
+ * Usage: node test/unit/run_phase_f2a.js
  */
 
 'use strict';
@@ -17,13 +17,13 @@ process.on('uncaughtException', (err) => {
 });
 
 async function runTests() {
-  console.log('=== Running Phase F2 Tests ===\n');
+  console.log('=== Running Phase F2A Tests ===\n');
 
   const tests = [
-    ...Object.values(require('./phase_f2_concurrent_write_isolation.test')),
-    ...Object.values(require('./phase_f2_manifest_failure_rollback.test')),
-    ...Object.values(require('./phase_f2_reader_consistency.test')),
-    ...Object.values(require('./phase_f2_same_dir_collision.test'))
+    ...Object.values(require('./phase_f2a_concurrent_write_isolation.test')),
+    ...Object.values(require('./phase_f2a_manifest_failure_rollback.test')),
+    ...Object.values(require('./phase_f2a_reader_consistency.test')),
+    ...Object.values(require('./phase_f2a_same_dir_collision.test'))
   ];
 
   let passed = 0;
@@ -59,7 +59,7 @@ async function runTests() {
     process.exit(1);
   }
 
-  console.log('\n✅ All Phase F2 tests passed');
+  console.log('\n✅ All Phase F2A tests passed');
   process.exit(0);
 }
 
