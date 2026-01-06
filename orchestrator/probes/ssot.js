@@ -6,6 +6,13 @@
  * - ProbeStep tool_name 固定 enum（避免命名漂移）
  * - Probe StepReport pass/fail 判定只看 StepReport 欄位
  * - Probe stable codes 不污染 RunnerCore RUN_CODES
+ *
+ * Namespace / Mapping Policy (避免 SSOT drift):
+ * - 策略 A（當前採用）：Probe 只產生「Probe namespace」codes（PROBE_STEP_CODES / PROBE_ATTEMPT_CODES）。
+ *   這些 codes 不得與 lib/tool_runner/ssot.js 的 RUN_CODES 產生字串重疊。
+ * - Probe → StepReport builder 可直接使用 Probe namespace codes（probe steps 的 StepReport.code）。
+ * - 若未來需要讓「Probe failure」進入 RUN stable codes 世界觀，必須在 builder 內做顯式映射
+ *   （例如 mapProbeCodeToRunCode），並以測試鎖定映射表；不得隱式混用兩套 codes。
  */
 
 'use strict';
@@ -94,6 +101,14 @@ const PROBE_ATTEMPT_CODES = Object.freeze({
 });
 
 /**
+ * Helper: 判定是否為 Probe namespace code（包含 step codes 與 attempt codes）
+ */
+function isProbeCode(code) {
+  if (typeof code !== 'string') return false;
+  return Object.values(PROBE_STEP_CODES).includes(code) || Object.values(PROBE_ATTEMPT_CODES).includes(code);
+}
+
+/**
  * Probe code → status mapping (blocked vs failed)
  *
  * 規則：
@@ -178,6 +193,7 @@ module.exports = {
   PROBE_CODE_TO_STATUS,
   ATTEMPT_EVENT_REQUIRED_KEYS,
   isProbeStepToolName,
+  isProbeCode,
   isProbeStepPass,
   isProbeStepFail,
   getProbeCodeStatus,
