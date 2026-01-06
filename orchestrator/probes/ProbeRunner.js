@@ -19,9 +19,11 @@ class ProbeRunner {
   /**
    * @param {Object} options
    * @param {string} [options.forceFailName] - Probe name to force-fail (from PROBE_FORCE_FAIL env)
+   * @param {string} [options.forceInvalidShapeName] - Probe name to force invalid shape (from PROBE_FORCE_INVALID_SHAPE env)
    */
   constructor(options = {}) {
     this.forceFailName = options.forceFailName || null;
+    this.forceInvalidShapeName = options.forceInvalidShapeName || null;
   }
 
   /**
@@ -33,6 +35,17 @@ class ProbeRunner {
    */
   shouldForceFail(probeName) {
     return this.forceFailName !== null && this.forceFailName === probeName;
+  }
+
+  /**
+   * Checks if a probe should force invalid shape response.
+   * Handled by probe's run() method (not runner), but runner can expose this state.
+   * 
+   * @param {string} probeName
+   * @returns {boolean}
+   */
+  shouldForceInvalidShape(probeName) {
+    return this.forceInvalidShapeName !== null && this.forceInvalidShapeName === probeName;
   }
 
   /**

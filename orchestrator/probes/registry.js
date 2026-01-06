@@ -15,6 +15,8 @@
  */
 
 const { makeSuccessResult, makeFailResult, PROBE_CODES } = require('./result');
+const { validateSearchShape, createInvalidSearchShape } = require('./searchShapeGate');
+const { PROBE_STEP_CODES } = require('./ssot');
 
 /**
  * Helper: Check if result indicates NO_MCP / stub mode (graceful pass)
@@ -102,6 +104,18 @@ const PROBES = [
     name: 'search',
     description: 'Search probe - search for simple keyword → MUST return valid structure (Blueprint §4)',
     run: async (provider) => {
+      // Phase D: Shape gate - validate response structure (not just presence of results)
+      // Support PROBE_FORCE_INVALID_SHAPE=search for deterministic testing
+      
+      const forceInvalidShape = process.env.PROBE_FORCE_INVALID_SHAPE === 'search';
+      
+      if (forceInvalidShape) {
+        // Deterministic invalid shape injection for testing
+        const invalidResponse = createInvalidSearchShape();
+        const validation = validateSearchShape(invalidResponse);
+        return makeFailResult('search', PROBE_STEP_CODES.SEARCH_PROBE_INVALID_SHAPE, provider.name);
+      }
+      
       // Blueprint: search_nodes for a simple keyword
       // Expected: MUST return a valid structure (even if empty)
       
@@ -114,8 +128,15 @@ const PROBES = [
         return makeSuccessResult('search', provider.name);
       }
       
-      // Success with any result is fine (including empty)
+      // Phase D: Validate response shape (not just result.ok)
       if (result.ok) {
+        const validation = validateSearchShape(result.data || {});
+        
+        if (!validation.valid) {
+          // Response succeeded but shape is invalid
+          return makeFailResult('search', PROBE_STEP_CODES.SEARCH_PROBE_INVALID_SHAPE, provider.name);
+        }
+        
         return makeSuccessResult('search', provider.name);
       }
       

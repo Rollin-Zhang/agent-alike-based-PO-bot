@@ -26,6 +26,54 @@
     "ended_at": { "type": "string", "format": "date-time" },
     "duration_ms": { "type": "number", "minimum": 0 },
     "result_summary": { "type": "string" },
-    "evidence_items": { "type": "array" }
+    "evidence_items": { "type": "array" },
+    "dep_snapshot_ref": {
+      "type": ["object", "null"],
+      "description": "Phase D: Reference to dependency snapshot (if step blocked due to missing deps)",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to dep_snapshot.v1.json (relative to logs/)"
+        },
+        "snapshot_id": {
+          "type": "string"
+        },
+        "missing_dep_codes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["path", "snapshot_id", "missing_dep_codes"]
+    },
+    "attempt_events": {
+      "type": "array",
+      "description": "Phase D: Step-level attempt events (minimal fields for traceability)",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["as_of", "status", "code", "duration_ms"],
+        "properties": {
+          "as_of": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["ok", "blocked", "failed"]
+          },
+          "code": {
+            "type": ["string", "null"]
+          },
+          "duration_ms": {
+            "type": "number",
+            "minimum": 0
+          },
+          "note": {
+            "type": "string",
+            "description": "Optional short note (not free-form log text)"
+          }
+        }
+      }
+    }
   }
 }

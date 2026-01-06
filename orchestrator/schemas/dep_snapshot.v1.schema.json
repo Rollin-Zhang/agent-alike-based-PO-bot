@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "dep_snapshot.v1.schema.json",
+  "title": "Dependency Snapshot v1",
+  "description": "Snapshot of dependency readiness state at a specific point in time (for probe traceability)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "snapshot_id",
+    "as_of",
+    "missing_dep_codes",
+    "required_deps",
+    "optional_deps"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "snapshot_id": {
+      "type": "string",
+      "description": "Unique identifier for this snapshot (e.g., UUID or timestamp-based)"
+    },
+    "as_of": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp when this snapshot was taken"
+    },
+    "missing_dep_codes": {
+      "type": "array",
+      "description": "Stable codes for missing/unavailable dependencies",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required_deps": {
+      "type": "object",
+      "description": "Required dependency states (depKey -> {ready, code, message?})",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["ready", "code"],
+        "properties": {
+          "ready": { "type": "boolean" },
+          "code": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      }
+    },
+    "optional_deps": {
+      "type": "object",
+      "description": "Optional dependency states (depKey -> {ready, code, message?})",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["ready", "code"],
+        "properties": {
+          "ready": { "type": "boolean" },
+          "code": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      }
+    },
+    "probe_context": {
+      "type": "string",
+      "description": "Optional context about why this snapshot was taken (e.g., 'startup_probes', 'tool_execution')"
+    }
+  }
+}

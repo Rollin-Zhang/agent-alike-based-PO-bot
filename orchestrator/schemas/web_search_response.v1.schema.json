@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "web_search_response.v1.schema.json",
+  "title": "Web Search Response v1",
+  "description": "Expected shape for web_search MCP tool response (search probe validation)",
+  "type": "object",
+  "required": ["summaries"],
+  "properties": {
+    "summaries": {
+      "type": "array",
+      "description": "Array of search result summaries",
+      "items": {
+        "type": "object",
+        "required": ["url", "title"],
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string"
+          },
+          "snippet": {
+            "type": "string",
+            "description": "Optional snippet/description"
+          },
+          "content": {
+            "type": "string",
+            "description": "Optional full content"
+          }
+        }
+      }
+    },
+    "query": {
+      "type": "string",
+      "description": "Optional: the original query"
+    }
+  }
+}

@@ -215,6 +215,29 @@ class Orchestrator {
       }
     }
 
+    // --- Phase D: Startup Probes (Defense-in-Depth) ---
+    const STRICT_PROBES = process.env.STRICT_PROBES !== 'false'; // Default true in production
+    const skipProbes = NO_MCP && !STRICT_PROBES; // Bypass only if NO_MCP + not strict
+
+    if (!skipProbes) {
+      const probeResult = await this.runStartupProbes();
+      
+      // Fail-fast if probes failed (unless bypass allowed)
+      if (!probeResult.all_passed) {
+        logger.error('[Startup Probes] One or more probes failed. Orchestrator will not start.');
+        logger.error(`[Startup Probes] Report written to: ${probeResult.report_path}`);
+        process.exit(1);
+      }
+      
+      logger.info('[Startup Probes] All probes passed ✓');
+      logger.info(`[Startup Probes] Report: ${probeResult.report_path}`);
+    } else {
+      // NO_MCP bypass: still write report but allow startup
+      const probeResult = await this.runStartupProbes({ bypass: true });
+      logger.warn('[Startup Probes] Bypassed (NO_MCP mode, STRICT_PROBES=false)');
+      logger.warn(`[Startup Probes] Traceable report: ${probeResult.report_path}`);
+    }
+
     this.app.use(cors());
     this.app.use(bodyParser.json({ limit: '10mb' }));
 
@@ -247,6 +270,127 @@ class Orchestrator {
     fs.appendFile(filepath, entry + '\n', (err) => {
       if (err) logger.error(`Failed to write log ${filename}`, err.message);
     });
+  }
+
+  /**
+   * Phase D: Run startup probes (defense-in-depth)
+   * 
+   * @param {Object} options
+   * @param {boolean} [options.bypass] - If true, run probes but don't fail-fast (NO_MCP bypass mode)
+   * @returns {Promise<Object>} { all_passed, report_path, report }
+   */
+  async runStartupProbes(options = {}) {
+    const { bypass = false } = options;
+    const { ProbeRunner, createProviderFromEnv } = require('./probes/ProbeRunner');
+    const { probeResultToStepReport, createAttemptEvent } = require('./probes/probeStepReportBuilder');
+    const { writeStartupProbeReport, writeDepSnapshot, createDepSnapshot } = require('./probes/writeProbeArtifacts');
+    const { PROBE_ATTEMPT_CODES } = require('./probes/ssot');
+
+    // Read environment
+    const forceFailName = process.env.PROBE_FORCE_FAIL || null;
+    const forceInvalidShape = process.env.PROBE_FORCE_INVALID_SHAPE || null;
+
+    // Create provider
+    const provider = createProviderFromEnv({ 
+      noMcp: NO_MCP, 
+      configPath: MCP_CONFIG_PATH,
+      realMcpTests: false // Startup probes don't require RUN_REAL_MCP_TESTS
+    });
+    await provider.initialize();
+
+    // Get dep states for snapshot
+    const depStates = this.toolGateway.getDepStates();
+    const now = new Date();
+    const as_of = now.toISOString();
+    const run_id = `startup_${Date.now()}`; // Simple timestamp-based ID (deterministic for same second)
+
+    // Create dep snapshot
+    const depSnapshot = createDepSnapshot({
+      depStates,
+      snapshot_id: run_id,
+      as_of,
+      probe_context: 'startup_probes'
+    });
+
+    // Write dep snapshot
+    const depSnapshotPath = writeDepSnapshot(depSnapshot, { run_id });
+
+    // Run probes (Phase D: pass forceInvalidShapeName to runner)
+    const runner = new ProbeRunner({ 
+      forceFailName,
+      forceInvalidShapeName: forceInvalidShape
+    });
+    const { results, allPassed } = await runner.runAll({ provider });
+
+    // Cleanup provider
+    await provider.cleanup();
+
+    // Convert ProbeResults to StepReports
+    const step_reports = results.map((probeResult, index) => {
+      const started_at = as_of; // Simplified: all probes started at same time
+      const ended_at = as_of; // Simplified: ended_at same as started_at (duration in duration_ms)
+      const duration_ms = 0; // Simplified: no per-probe duration tracking in this version
+
+      const attempt_events = bypass
+        ? [createAttemptEvent({
+            as_of,
+            status: 'ok',
+            code: PROBE_ATTEMPT_CODES.PROBE_SKIPPED_NO_MCP,
+            duration_ms: 0,
+            note: 'NO_MCP bypass (STRICT_PROBES=false)'
+          })]
+        : [];
+
+      const dep_snapshot_ref = depSnapshot.missing_dep_codes.length > 0 ? {
+        path: depSnapshotPath,
+        snapshot_id: depSnapshot.snapshot_id,
+        missing_dep_codes: depSnapshot.missing_dep_codes
+      } : null;
+
+      return probeResultToStepReport({
+        probeResult,
+        step_index: index + 1,
+        started_at,
+        ended_at,
+        duration_ms,
+        dep_snapshot_ref,
+        attempt_events
+      });
+    });
+
+    // Build startup probe report
+    const report = {
+      version: 'v1',
+      mode: bypass ? 'no_mcp_bypass' : 'strict',
+      report_id: run_id,
+      as_of,
+      all_passed: allPassed,
+      exit_code: allPassed ? 0 : 1,
+      provider: provider.name,
+      provider_selected_reason: NO_MCP ? 'NO_MCP' : 'FALLBACK_NO_CONFIG',
+      strict_probes: !bypass,
+      no_mcp: NO_MCP,
+      force_fail_name: forceFailName,
+      force_invalid_shape: forceInvalidShape,
+      step_reports,
+      dep_snapshot_ref: depSnapshot.missing_dep_codes.length > 0 ? {
+        path: depSnapshotPath,
+        snapshot_id: depSnapshot.snapshot_id,
+        missing_dep_codes: depSnapshot.missing_dep_codes
+      } : null,
+      evidence: [],
+      evidence_truncated: false,
+      evidence_dropped_count: 0
+    };
+
+    // Write startup probe report
+    const reportPath = writeStartupProbeReport(report, { run_id });
+
+    return {
+      all_passed: allPassed,
+      report_path: reportPath,
+      report
+    };
   }
 
   setupRoutes() {

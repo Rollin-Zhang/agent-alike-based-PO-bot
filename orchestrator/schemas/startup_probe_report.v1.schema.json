@@ -1,0 +1,116 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "startup_probe_report.v1.schema.json",
+  "title": "Startup Probe Report v1",
+  "description": "Report of startup probes execution (security, access, search, memory)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "mode",
+    "report_id",
+    "as_of",
+    "all_passed",
+    "exit_code",
+    "provider",
+    "provider_selected_reason",
+    "strict_probes",
+    "step_reports",
+    "dep_snapshot_ref"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "v1"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["strict", "no_mcp_bypass"],
+      "description": "Execution mode: strict=fail-fast; no_mcp_bypass=degraded (NO_MCP + STRICT_PROBES=false)"
+    },
+    "report_id": {
+      "type": "string",
+      "description": "Unique identifier for this report (e.g., UUID or timestamp-based)"
+    },
+    "as_of": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp when probes were executed"
+    },
+    "all_passed": {
+      "type": "boolean",
+      "description": "Whether all probes passed (based on step_reports status)"
+    },
+    "exit_code": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "0=all passed, 1=at least one failed"
+    },
+    "provider": {
+      "type": "string",
+      "description": "Provider name used (e.g., 'NoMcpProvider', 'RealMcpProvider')"
+    },
+    "provider_selected_reason": {
+      "type": "string",
+      "enum": ["NO_MCP", "RUN_REAL_MCP_TESTS", "MCP_CONFIG_PATH_EXISTS", "FALLBACK_NO_CONFIG"],
+      "description": "Why this provider was selected"
+    },
+    "strict_probes": {
+      "type": "boolean",
+      "description": "Whether STRICT_PROBES was enabled (affects fail-fast behavior)"
+    },
+    "no_mcp": {
+      "type": "boolean",
+      "description": "Whether NO_MCP mode was enabled"
+    },
+    "force_fail_name": {
+      "type": ["string", "null"],
+      "description": "Probe name that was forced to fail (PROBE_FORCE_FAIL env)"
+    },
+    "force_invalid_shape": {
+      "type": ["string", "null"],
+      "description": "Probe name that was forced invalid shape (PROBE_FORCE_INVALID_SHAPE env)"
+    },
+    "step_reports": {
+      "type": "array",
+      "description": "StepReport for each probe (security, access, search, memory)",
+      "items": {
+        "$ref": "step_report.v1.schema.json"
+      }
+    },
+    "dep_snapshot_ref": {
+      "type": ["object", "null"],
+      "description": "Reference to dependency snapshot (if probes were blocked due to missing deps)",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to dep_snapshot.v1.json (relative to logs/)"
+        },
+        "snapshot_id": {
+          "type": "string",
+          "description": "Unique identifier for the snapshot"
+        },
+        "missing_dep_codes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Quick reference: stable codes for missing deps"
+        }
+      },
+      "required": ["path", "snapshot_id", "missing_dep_codes"]
+    },
+    "evidence": {
+      "type": "array",
+      "description": "Evidence items (governed by A.2 evidence policy)"
+    },
+    "evidence_truncated": {
+      "type": "boolean",
+      "description": "Whether evidence was truncated due to limits"
+    },
+    "evidence_dropped_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of evidence items dropped"
+    }
+  }
+}

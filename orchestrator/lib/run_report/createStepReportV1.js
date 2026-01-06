@@ -22,10 +22,12 @@ function createStepReportV1(params = {}) {
     ended_at = isoNow(),
     duration_ms = 0,
     result_summary = '',
-    evidence_items = []
+    evidence_items = [],
+    dep_snapshot_ref = null,
+    attempt_events = []
   } = params;
 
-  return {
+  const report = {
     step_index: Number(step_index),
     tool_name: String(tool_name || ''),
     side_effect: TOOL_SIDE_EFFECTS[String(tool_name || '')] || 'unknown',
@@ -37,6 +39,18 @@ function createStepReportV1(params = {}) {
     result_summary: String(result_summary || ''),
     evidence_items: Array.isArray(evidence_items) ? evidence_items : []
   };
+
+  // Phase D: dep_snapshot_ref (optional)
+  if (dep_snapshot_ref !== null && typeof dep_snapshot_ref === 'object') {
+    report.dep_snapshot_ref = dep_snapshot_ref;
+  }
+
+  // Phase D: attempt_events (optional)
+  if (Array.isArray(attempt_events) && attempt_events.length > 0) {
+    report.attempt_events = attempt_events;
+  }
+
+  return report;
 }
 
 module.exports = { createStepReportV1 };
