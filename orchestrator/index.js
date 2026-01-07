@@ -12,6 +12,7 @@ const { resolveRuntimeEnv } = require('./shared/constants');
 const deriveToolTicketFromTriage = require('./lib/deriveToolTicketFromTriage');
 const { maybeDeriveReplyFromToolOnFill } = require('./lib/maybeDeriveReplyFromToolOnFill');
 const schemaGate = require('./lib/schemaGate');
+const { emitGuardRejectionEvidenceV1 } = require('./lib/evidence/emitGuardRejectionEvidenceV1');
 
 // --- M2-C.1 Cutover observability ---
 const { createCutoverPolicy } = require('./lib/compat/CutoverPolicy');
@@ -561,12 +562,59 @@ class Orchestrator {
           });
         }
 
+        const expectedLeaseOwner = ticket?.metadata?.lease_owner;
+        const expectedLeaseToken = ticket?.metadata?.lease_token;
+
         const completeResult = await this.ticketStore.complete(id, outputs, by, { lease_owner, lease_token });
         if (completeResult && completeResult.ok === false) {
           schemaGate.setWarnHeader(res, schemaWarnCount);
+
+          let evidence_run_id = null;
+          let evidence_error = null;
+          try {
+            const enableGuardEvidence = process.env.ENABLE_GUARD_REJECTION_EVIDENCE === '1';
+            if (enableGuardEvidence && completeResult.code === 'lease_owner_mismatch') {
+              const ev = emitGuardRejectionEvidenceV1({
+                ticket_id: id,
+                ticket_kind: ticket?.metadata?.kind || null,
+                stable_code: 'lease_owner_mismatch',
+                http: {
+                  method: req.method,
+                  path: req.originalUrl || req.path,
+                  status: 409,
+                  request_id: req.headers['x-request-id'] || null
+                },
+                lease_expected: {
+                  lease_owner: expectedLeaseOwner,
+                  lease_token: expectedLeaseToken
+                },
+                lease_provided: {
+                  lease_owner,
+                  lease_token
+                }
+              });
+              evidence_run_id = ev.evidence_run_id;
+            }
+          } catch (e) {
+            // Best-effort: never block the rejection response.
+            logger.error('emitGuardRejectionEvidenceV1 failed', e);
+
+            // Do not fully swallow regressions in tests/debug.
+            const debugEvidence = process.env.NODE_ENV === 'test' || process.env.DEBUG_EVIDENCE === '1';
+            if (debugEvidence) {
+              const msg = (e && e.message) ? String(e.message) : '';
+              if (msg.includes('unsupported_stable_code')) evidence_error = 'unsupported_stable_code';
+              else if (msg.includes('LOGS_DIR required')) evidence_error = 'missing_logs_dir';
+              else if (msg.includes('lease_debug_v1_schema_invalid')) evidence_error = 'lease_debug_schema_invalid';
+              else evidence_error = 'emit_failed';
+            }
+          }
+
           return res.status(409).json({
             status: 'rejected',
-            error_code: completeResult.code
+            error_code: completeResult.code,
+            ...(evidence_run_id ? { evidence_run_id } : {}),
+            ...(evidence_error ? { evidence_error } : {})
           });
         }
         

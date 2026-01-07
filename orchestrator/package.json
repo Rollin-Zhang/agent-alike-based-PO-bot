@@ -10,6 +10,7 @@
     "test:phase_e": "node test/unit/run_phase_e.js",
     "test:phase_f1": "node test/unit/run_phase_f1.js",
     "test:phase_f2a": "node test/unit/run_phase_f2a.js",
+    "test:phase_f2b": "node test/unit/run_phase_f2b.js",
     "strict:check": "node scripts/strict_gate_check.js",
     "accept:no_mcp": "node scripts/accept_no_mcp.js",
     "accept:real_mcp": "node scripts/accept_real_mcp.js",

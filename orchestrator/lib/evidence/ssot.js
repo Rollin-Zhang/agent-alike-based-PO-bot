@@ -350,6 +350,11 @@ function assertEvidenceItem(item) {
 }
 
 module.exports = {
+  // Reason-code SSOT (used by evidence manifest validation and guard rejection evidence)
+  EVIDENCE_REASON_RUNTIME,
+  EVIDENCE_REASON_INTEGRITY,
+  isEvidenceReason,
+
   EVIDENCE_STORE_ROOT,
   UNKNOWN_KIND_GROUP,
   DEFAULT_EVIDENCE_LIMITS,

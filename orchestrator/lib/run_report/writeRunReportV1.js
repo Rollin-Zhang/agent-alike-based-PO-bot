@@ -37,7 +37,8 @@ function writeRunReportV1(options = {}) {
     filePath,
     reportV1,
     mode_snapshot = undefined,
-    run_id = undefined
+    run_id = undefined,
+    emit_manifest = true
   } = options;
 
   if (!filePath || typeof filePath !== 'string') {
@@ -91,6 +92,8 @@ function writeRunReportV1(options = {}) {
   }
 
   fs.renameSync(tmpPath, filePath);
+
+  if (!emit_manifest) return;
 
   try {
     writeEvidenceManifestV1({
