@@ -13,6 +13,8 @@ const { writeEvidenceManifestV1 } = require('./writeEvidenceManifestV1');
 const { RUN_STATUS } = require('../tool_runner/ssot');
 const { isEvidenceReason } = require('./ssot');
 
+const SYSTEM_REJECTION_CHECK_NAME = 'system_rejection_evidence_ok';
+
 function ensureMinRunId(runId) {
   const v = String(runId || '');
   if (v.length < 8) throw new Error('emitSystemRejectionEvidenceV1: run_id minLength 8');
@@ -96,8 +98,7 @@ function emitSystemRejectionEvidenceV1(params = {}) {
     http = {},
     details_kind,
     details_payload,
-    mode_snapshot,
-    check_name = 'system_rejection_evidence_ok'
+    mode_snapshot
   } = params;
 
   const ticketId = String(ticket_id || '');
@@ -180,8 +181,8 @@ function emitSystemRejectionEvidenceV1(params = {}) {
     ],
     checks: [
       {
-        name: String(check_name),
-        ok: false,
+        name: SYSTEM_REJECTION_CHECK_NAME,
+        ok: true,
         reason_codes: [code],
         details_ref: detailsFilename
       }

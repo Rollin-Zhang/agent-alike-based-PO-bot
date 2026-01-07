@@ -15,7 +15,7 @@ function sha256Hex(s) {
  * Minimal, HTTP-handler level evidence emission for guard rejections.
  * - Writes a minimal run_report_v1.json into `${LOGS_DIR}/${evidence_run_id}/`
  * - Writes lease_debug_v1.json (token hashes only)
- * - writeRunReportV1 triggers evidence_manifest_v1.json + manifest_self_hash_v1.json
+ * - Writes evidence_manifest_v1.json + manifest_self_hash_v1.json
  */
 function emitGuardRejectionEvidenceV1(params = {}) {
   const {
@@ -54,8 +54,7 @@ function emitGuardRejectionEvidenceV1(params = {}) {
     http,
     details_kind: 'lease_debug_v1',
     details_payload: leaseDebug,
-    mode_snapshot,
-    check_name: 'guard_rejection_evidence_ok'
+    mode_snapshot
   });
 
   return {

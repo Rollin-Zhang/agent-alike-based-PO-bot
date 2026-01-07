@@ -213,9 +213,9 @@ async function testLeaseOwnerMismatchEvidence() {
     console.log(`[Test] manifest_self_hash_v1: value=${selfHash.value.slice(0, 16)}...`);
 
     // Step 10: Verify checks[] contains lease_owner_mismatch reason_codes + details_ref
-    const leaseCheck = (manifest.checks || []).find((c) => c && c.name === 'guard_rejection_evidence_ok');
-    assert.ok(leaseCheck, `No check with name=guard_rejection_evidence_ok. checks=${JSON.stringify(manifest.checks, null, 2)}`);
-    assert.ok(Array.isArray(leaseCheck.reason_codes) && leaseCheck.reason_codes.includes(EVIDENCE_REASON_RUNTIME.LEASE_OWNER_MISMATCH), 'guard_rejection_evidence_ok missing lease_owner_mismatch reason code');
+    const leaseCheck = (manifest.checks || []).find((c) => c && c.name === 'system_rejection_evidence_ok');
+    assert.ok(leaseCheck, `No check with name=system_rejection_evidence_ok. checks=${JSON.stringify(manifest.checks, null, 2)}`);
+    assert.ok(Array.isArray(leaseCheck.reason_codes) && leaseCheck.reason_codes.includes(EVIDENCE_REASON_RUNTIME.LEASE_OWNER_MISMATCH), 'system_rejection_evidence_ok missing lease_owner_mismatch reason code');
     assert.ok(leaseCheck.details_ref, 'Missing details_ref in lease_owner_mismatch check');
 
     console.log(`[Test] Found lease_owner_mismatch check: name=${leaseCheck.name}, details_ref=${leaseCheck.details_ref}`);

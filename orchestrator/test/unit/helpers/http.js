@@ -91,9 +91,32 @@ async function httpListTickets(baseUrl, params = {}) {
   return httpRequest(baseUrl, path, 'GET');
 }
 
+/**
+ * Generic POST JSON helper
+ * @param {string} baseUrl - Server base URL
+ * @param {string} path - Request path
+ * @param {Object} data - JSON payload
+ * @returns {Promise<Object>} Response {status, data}
+ */
+async function httpPostJson(baseUrl, path, data) {
+  return httpRequest(baseUrl, path, 'POST', data);
+}
+
+/**
+ * Generic GET JSON helper
+ * @param {string} baseUrl - Server base URL
+ * @param {string} path - Request path
+ * @returns {Promise<Object>} Response {status, data}
+ */
+async function httpGetJson(baseUrl, path) {
+  return httpRequest(baseUrl, path, 'GET');
+}
+
 module.exports = {
   httpPostFill,
   httpPostEvent,
   httpGetTicket,
-  httpListTickets
+  httpListTickets,
+  httpPostJson,
+  httpGetJson
 };
