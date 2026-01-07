@@ -618,68 +618,6 @@ class Orchestrator {
           }
         }
 
-        // --- Tool validation gate (Phase F2B-1(2): unknown_tool fill-path) ---
-        // Check tool_steps in TOOL tickets for unknown tools before lease validation.
-        // Default OFF to preserve current behavior. Enable explicitly in tests.
-        const enableToolValidationGate = process.env.ENABLE_TOOL_VALIDATION_GATE === '1';
-        if (enableToolValidationGate && ticket?.metadata?.kind === 'TOOL') {
-          const toolSteps = ticket?.metadata?.tool_input?.tool_steps || ticket?.tool_steps || [];
-          
-          // Find first unknown tool in steps
-          let unknownTool = null;
-          for (const step of toolSteps) {
-            const toolName = step?.tool_name;
-            if (typeof toolName === 'string' && toolName.trim() !== '') {
-              if (!TOOL_ARGS_ALLOWLIST[toolName]) {
-                unknownTool = { tool_name: toolName, args: step?.args || null };
-                break;
-              }
-            }
-          }
-
-          if (unknownTool) {
-            let evidence_run_id = null;
-            let evidence_error = null;
-            try {
-              const enableGuardEvidence = process.env.ENABLE_GUARD_REJECTION_EVIDENCE === '1';
-              if (enableGuardEvidence) {
-                const argsShape = unknownTool.args && typeof unknownTool.args === 'object' && !Array.isArray(unknownTool.args)
-                  ? Object.fromEntries(Object.keys(unknownTool.args).map(k => [k, typeof unknownTool.args[k]]))
-                  : null;
-
-                const ev = emitToolFailEvidenceV1({
-                  ticket_id: id,
-                  tool_name: unknownTool.tool_name,
-                  error_type: 'unknown_tool',
-                  message: `Unknown tool: ${unknownTool.tool_name}`,
-                  args_shape: argsShape,
-                  gateway_phase: 'fill_validation'
-                });
-                evidence_run_id = ev.evidence_run_id;
-              }
-            } catch (e) {
-              logger.error('emitToolFailEvidenceV1 failed', e);
-              const debugEvidence = process.env.NODE_ENV === 'test' || process.env.DEBUG_EVIDENCE === '1';
-              if (debugEvidence) {
-                const msg = (e && e.message) ? String(e.message) : '';
-                if (msg.includes('unsupported_stable_code')) evidence_error = 'unsupported_stable_code';
-                else if (msg.includes('LOGS_DIR required')) evidence_error = 'missing_logs_dir';
-                else if (msg.includes('tool_debug_v1_schema_invalid')) evidence_error = 'tool_debug_schema_invalid';
-                else if (msg.includes('missing_required_artifacts')) evidence_error = 'missing_required_artifacts';
-                else evidence_error = 'emit_failed';
-              }
-            }
-
-            schemaGate.setWarnHeader(res, schemaWarnCount);
-            return res.status(409).json({
-              status: 'rejected',
-              error_code: 'unknown_tool',
-              ...(evidence_run_id ? { evidence_run_id } : {}),
-              ...(evidence_error ? { evidence_error } : {})
-            });
-          }
-        }
-
         const expectedLeaseOwner = ticket?.metadata?.lease_owner;
         const expectedLeaseToken = ticket?.metadata?.lease_token;
 
@@ -735,6 +673,72 @@ class Orchestrator {
             ...(evidence_run_id ? { evidence_run_id } : {}),
             ...(evidence_error ? { evidence_error } : {})
           });
+        }
+
+        // --- Tool validation gate (Phase F2B-1(2): unknown_tool fill-path) ---
+        // AFTER lease gate: only lease owners can trigger validation (prevents allowlist probing)
+        // Data source: ONLY ticket.metadata.tool_input.tool_steps (no fallback for consistency)
+        // NOTE: Legacy TOOL tickets with only ticket.tool_steps will bypass validation (silent-bypass)
+        //       Future enhancement: emit tool_input_missing rejection for non-conformant tickets
+        const enableToolValidationGate = process.env.ENABLE_TOOL_VALIDATION_GATE === '1';
+        if (enableToolValidationGate && ticket?.metadata?.kind === 'TOOL') {
+          const toolSteps = ticket?.metadata?.tool_input?.tool_steps || [];
+          const dataSource = 'metadata.tool_input.tool_steps';
+          
+          // Find first unknown tool in steps
+          let unknownTool = null;
+          for (const step of toolSteps) {
+            const toolName = step?.tool_name || step?.server;  // Support both formats
+            if (typeof toolName === 'string' && toolName.trim() !== '') {
+              if (!TOOL_ARGS_ALLOWLIST[toolName]) {
+                unknownTool = { tool_name: toolName, args: step?.args || null };
+                break;
+              }
+            }
+          }
+
+          if (unknownTool) {
+            let evidence_run_id = null;
+            let evidence_error = null;
+            try {
+              const enableGuardEvidence = process.env.ENABLE_GUARD_REJECTION_EVIDENCE === '1';
+              if (enableGuardEvidence) {
+                const argsShape = unknownTool.args && typeof unknownTool.args === 'object' && !Array.isArray(unknownTool.args)
+                  ? Object.fromEntries(Object.keys(unknownTool.args).map(k => [k, typeof unknownTool.args[k]]))
+                  : null;
+
+                const ev = await emitToolFailEvidenceV1({
+                  ticket_id: id,
+                  tool_name: unknownTool.tool_name,
+                  error_type: 'unknown_tool',
+                  message: `Unknown tool: ${unknownTool.tool_name}`,
+                  args_shape: argsShape,
+                  gateway_phase: 'fill_validation',
+                  source: dataSource
+                });
+                evidence_run_id = ev.evidence_run_id;
+              }
+            } catch (e) {
+              logger.error('emitToolFailEvidenceV1 failed', e);
+              const debugEvidence = process.env.NODE_ENV === 'test' || process.env.DEBUG_EVIDENCE === '1';
+              if (debugEvidence) {
+                const msg = (e && e.message) ? String(e.message) : '';
+                if (msg.includes('unsupported_stable_code')) evidence_error = 'unsupported_stable_code';
+                else if (msg.includes('LOGS_DIR required')) evidence_error = 'missing_logs_dir';
+                else if (msg.includes('tool_debug_v1_schema_invalid')) evidence_error = 'tool_debug_schema_invalid';
+                else if (msg.includes('missing_required_artifacts')) evidence_error = 'missing_required_artifacts';
+                else evidence_error = 'emit_failed';
+              }
+            }
+
+            schemaGate.setWarnHeader(res, schemaWarnCount);
+            return res.status(409).json({
+              status: 'rejected',
+              error_code: 'unknown_tool',
+              ...(evidence_run_id ? { evidence_run_id } : {}),
+              ...(evidence_error ? { evidence_error } : {})
+            });
+          }
         }
         
         // Set warn header before response (never modifies body)

@@ -29,6 +29,10 @@
     "gateway_phase": {
       "type": "string",
       "description": "Optional execution phase hint (fill_validation, runner_dispatch, gateway_exec, etc.)"
+    },
+    "source": {
+      "type": "string",
+      "description": "Optional data source hint (metadata.tool_input.tool_steps, ticket.tool_steps, etc.)"
     }
   }
 }

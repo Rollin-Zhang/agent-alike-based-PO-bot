@@ -26,6 +26,7 @@ const { emitSystemRejectionEvidenceV1 } = require('./emitSystemRejectionEvidence
  * @param {Object} [params.args_shape] - Optional snapshot of args keys (key → type)
  * @param {string} [params.stack] - Optional stack trace
  * @param {string} [params.gateway_phase] - Optional phase hint ('fill_validation', etc.)
+ * @param {string} [params.source] - Optional data source hint ('metadata.tool_input.tool_steps', etc.)
  * @param {Object} [params.mode_snapshot] - Optional mode snapshot for evidence context
  * @returns {Promise<{ evidence_run_id: string }>}
  * @throws {Error} If emission fails (caller should catch and best-effort log)
@@ -38,6 +39,7 @@ async function emitToolFailEvidenceV1({
   args_shape = null,
   stack = null,
   gateway_phase = 'fill_validation',
+  source = null,
   mode_snapshot = null
 }) {
   // Validate required fields
@@ -72,6 +74,9 @@ async function emitToolFailEvidenceV1({
   }
   if (gateway_phase && typeof gateway_phase === 'string') {
     toolDebugPayload.gateway_phase = gateway_phase;
+  }
+  if (source && typeof source === 'string') {
+    toolDebugPayload.source = source;
   }
 
   // Call system emitter with stable code 'unknown_tool'

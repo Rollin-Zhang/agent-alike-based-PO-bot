@@ -124,13 +124,31 @@ function selectOverallCode(stepReports, overallStatus) {
  */
 const TOOL_ARGS_SOURCE = 'ssot'; // 或 'registry'（future）
 
-const TOOL_ARGS_ALLOWLIST = Object.freeze({
+// Test-only environment variable support: TEST_EXCLUDE_TOOLS_FROM_ALLOWLIST
+// Format: comma-separated tool names to exclude (e.g., "memory,filesystem")
+// Used to simulate unknown_tool scenarios in system-level tests
+// GUARDRAIL: Only active in test env to prevent production misconfiguration disasters
+const excludedTools = (process.env.NODE_ENV === 'test' && process.env.TEST_EXCLUDE_TOOLS_FROM_ALLOWLIST)
+  ? process.env.TEST_EXCLUDE_TOOLS_FROM_ALLOWLIST.split(',').map(t => t.trim()).filter(t => t.length > 0)
+  : [];
+
+const baseAllowlist = {
   // web_search MCP tools commonly use: query + limit/max_results + optional toggles
   web_search: ['query', 'max_results', 'limit', 'timeout_ms', 'includeContent', 'maxContentLength'],
   // memory MCP server supports multiple tools with different arg keys; allow the union.
   memory: ['operation', 'entities', 'relations', 'observations', 'query', 'names', 'ids'],
   filesystem: ['path', 'operation', 'content']
-});
+};
+
+// Apply test-only exclusions
+const TOOL_ARGS_ALLOWLIST = Object.freeze(
+  Object.entries(baseAllowlist).reduce((acc, [tool, args]) => {
+    if (!excludedTools.includes(tool)) {
+      acc[tool] = args;
+    }
+    return acc;
+  }, {})
+);
 
 /**
  * 驗證 tool args（per-tool allowlist）
