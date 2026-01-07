@@ -35,7 +35,8 @@ async function runTests() {
   const tests = [
     ...Object.values(require('./phase_f2b_lease_owner_mismatch.test')),
     ...Object.values(require('./phase_f2b_readiness_blocked.test')),
-    ...Object.values(require('./phase_f2b_tool_fail_unknown_tool.test'))
+    ...Object.values(require('./phase_f2b_tool_fail_unknown_tool.test')),
+    ...Object.values(require('./phase_f2b_concurrency_lease_conflict.test'))
   ];
 
   let passed = 0;

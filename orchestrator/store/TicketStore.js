@@ -248,6 +248,45 @@ class TicketStore {
     return candidates;
   }
 
+    // ============================================================
+    // leaseById: pending → running (targeted)
+    // Used for concurrency contract tests (single ticket mutual exclusion)
+    // ============================================================
+    async leaseById(id, leaseSec = 300, owner = null) {
+      const now = Date.now();
+      const expiresAt = now + leaseSec * 1000; // epoch ms (Stage 2 TTL format)
+      const leaseOwner = owner || `lease:${newLeaseToken()}`;
+
+      // 1. release expired leases (may yield)
+      await this.releaseExpiredLeases();
+
+      // 2. atomic check+set (no await)
+      const ticket = this.tickets.get(id);
+      if (!ticket) return { ok: false, code: 'not_found' };
+
+      if (ticket.status !== TICKET_STATUS.PENDING) {
+        return {
+          ok: false,
+          code: 'lease_conflict',
+          details: {
+            current_status: ticket.status,
+            lease_owner: ticket?.metadata?.lease_owner || null,
+            lease_token_present: Boolean(ticket?.metadata?.lease_token)
+          }
+        };
+      }
+
+      const nowTs = new Date().toISOString();
+      ticket.status = TICKET_STATUS.RUNNING;
+      ticket.metadata.leased_at = nowTs;
+      ticket.metadata.lease_expires = expiresAt;
+      ticket.metadata.lease_owner = leaseOwner;
+      ticket.metadata.lease_token = newLeaseToken();
+      ticket.metadata.updated_at = nowTs;
+
+      return { ok: true, ticket };
+    }
+
   // ============================================================
   // complete: running/pending → done (with outputs)
   // Note: Allow from pending for direct fill (bypass lease) scenarios

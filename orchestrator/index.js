@@ -500,6 +500,43 @@ class Orchestrator {
       }
     });
 
+    // Targeted lease for a specific ticket (system-level concurrency contract)
+    // NOTE: This endpoint is intentionally minimal: it stabilizes 409 contract first,
+    // without writing evidence artifacts to avoid disk amplification under attack.
+    this.app.post('/v1/tickets/:id/lease', async (req, res) => {
+      const { id } = req.params;
+      try {
+        const { lease_sec, lease_owner } = req.body || {};
+        const result = await this.ticketStore.leaseById(id, lease_sec || 300, lease_owner || null);
+
+        if (!result || result.ok === false) {
+          if (result.code === 'not_found') {
+            return res.status(404).json({ error: 'Ticket not found' });
+          }
+
+          if (result.code === 'lease_conflict') {
+            return res.status(409).json({
+              status: 'rejected',
+              error_code: 'lease_conflict',
+              stable_code: 'lease_conflict',
+              ...(result.details ? { details: result.details } : {})
+            });
+          }
+
+          return res.status(409).json({
+            status: 'rejected',
+            error_code: result.code || 'lease_failed',
+            stable_code: result.code || 'lease_failed'
+          });
+        }
+
+        return res.status(200).json({ status: 'leased', ticket: result.ticket });
+      } catch (e) {
+        logger.error('Failed to lease ticket by id', e);
+        return res.status(500).json({ error: e.message });
+      }
+    });
+
     this.app.get('/v1/tickets/:id', async (req, res) => {
       const { id } = req.params;
       try {

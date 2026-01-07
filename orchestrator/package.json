@@ -7,6 +7,7 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "test": "jest",
+    "check:no-nested-git": "node ../scripts/check_no_nested_git.js --root=..",
     "test:phase_e": "node test/unit/run_phase_e.js",
     "test:phase_f1": "node test/unit/run_phase_f1.js",
     "test:phase_f2a": "node test/unit/run_phase_f2a.js",
