@@ -106,6 +106,11 @@ function validateKnownKindOrThrow(kind, payload) {
     return validateAgainstSchemaOrThrow({ obj: payload, schemaAbsPath: schemaAbs, label: 'readiness_debug_v1' });
   }
 
+  if (k === 'tool_debug_v1') {
+    const schemaAbs = path.resolve(__dirname, '../../schemas/tool_debug.v1.schema.json');
+    return validateAgainstSchemaOrThrow({ obj: payload, schemaAbsPath: schemaAbs, label: 'tool_debug_v1' });
+  }
+
   if (k === 'dep_snapshot_v1') {
     const schemaAbs = path.resolve(__dirname, '../../schemas/dep_snapshot.v1.schema.json');
     return validateAgainstSchemaOrThrow({ obj: payload, schemaAbsPath: schemaAbs, label: 'dep_snapshot_v1' });

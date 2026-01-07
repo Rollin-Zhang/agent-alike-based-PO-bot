@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "tool_debug.v1.schema.json",
+  "title": "Tool Debug v1",
+  "description": "Minimal, schema-locked debug payload for tool_fail system rejection evidence (unknown_tool at fill-path).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "ticket_id",
+    "tool_name",
+    "error_type",
+    "message"
+  ],
+  "properties": {
+    "version": { "type": "string", "const": "v1" },
+    "ticket_id": { "type": "string", "minLength": 1 },
+    "tool_name": { "type": "string" },
+    "args_shape": {
+      "type": "object",
+      "description": "Optional shape snapshot of tool args (key → type)"
+    },
+    "error_type": {
+      "type": "string",
+      "enum": ["unknown_tool", "invalid_args", "timeout", "exec_failed"]
+    },
+    "message": { "type": "string" },
+    "stack": { "type": "string" },
+    "gateway_phase": {
+      "type": "string",
+      "description": "Optional execution phase hint (fill_validation, runner_dispatch, gateway_exec, etc.)"
+    }
+  }
+}

@@ -14,6 +14,8 @@ const { maybeDeriveReplyFromToolOnFill } = require('./lib/maybeDeriveReplyFromTo
 const schemaGate = require('./lib/schemaGate');
 const { emitGuardRejectionEvidenceV1 } = require('./lib/evidence/emitGuardRejectionEvidenceV1');
 const { emitReadinessBlockedEvidenceV1 } = require('./lib/evidence/emitReadinessBlockedEvidenceV1');
+const { emitToolFailEvidenceV1 } = require('./lib/evidence/emitToolFailEvidenceV1');
+const { TOOL_ARGS_ALLOWLIST } = require('./lib/tool_runner/ssot');
 
 // --- M2-C.1 Cutover observability ---
 const { createCutoverPolicy } = require('./lib/compat/CutoverPolicy');
@@ -610,6 +612,68 @@ class Orchestrator {
             return res.status(409).json({
               status: 'rejected',
               error_code: 'readiness_blocked',
+              ...(evidence_run_id ? { evidence_run_id } : {}),
+              ...(evidence_error ? { evidence_error } : {})
+            });
+          }
+        }
+
+        // --- Tool validation gate (Phase F2B-1(2): unknown_tool fill-path) ---
+        // Check tool_steps in TOOL tickets for unknown tools before lease validation.
+        // Default OFF to preserve current behavior. Enable explicitly in tests.
+        const enableToolValidationGate = process.env.ENABLE_TOOL_VALIDATION_GATE === '1';
+        if (enableToolValidationGate && ticket?.metadata?.kind === 'TOOL') {
+          const toolSteps = ticket?.metadata?.tool_input?.tool_steps || ticket?.tool_steps || [];
+          
+          // Find first unknown tool in steps
+          let unknownTool = null;
+          for (const step of toolSteps) {
+            const toolName = step?.tool_name;
+            if (typeof toolName === 'string' && toolName.trim() !== '') {
+              if (!TOOL_ARGS_ALLOWLIST[toolName]) {
+                unknownTool = { tool_name: toolName, args: step?.args || null };
+                break;
+              }
+            }
+          }
+
+          if (unknownTool) {
+            let evidence_run_id = null;
+            let evidence_error = null;
+            try {
+              const enableGuardEvidence = process.env.ENABLE_GUARD_REJECTION_EVIDENCE === '1';
+              if (enableGuardEvidence) {
+                const argsShape = unknownTool.args && typeof unknownTool.args === 'object' && !Array.isArray(unknownTool.args)
+                  ? Object.fromEntries(Object.keys(unknownTool.args).map(k => [k, typeof unknownTool.args[k]]))
+                  : null;
+
+                const ev = emitToolFailEvidenceV1({
+                  ticket_id: id,
+                  tool_name: unknownTool.tool_name,
+                  error_type: 'unknown_tool',
+                  message: `Unknown tool: ${unknownTool.tool_name}`,
+                  args_shape: argsShape,
+                  gateway_phase: 'fill_validation'
+                });
+                evidence_run_id = ev.evidence_run_id;
+              }
+            } catch (e) {
+              logger.error('emitToolFailEvidenceV1 failed', e);
+              const debugEvidence = process.env.NODE_ENV === 'test' || process.env.DEBUG_EVIDENCE === '1';
+              if (debugEvidence) {
+                const msg = (e && e.message) ? String(e.message) : '';
+                if (msg.includes('unsupported_stable_code')) evidence_error = 'unsupported_stable_code';
+                else if (msg.includes('LOGS_DIR required')) evidence_error = 'missing_logs_dir';
+                else if (msg.includes('tool_debug_v1_schema_invalid')) evidence_error = 'tool_debug_schema_invalid';
+                else if (msg.includes('missing_required_artifacts')) evidence_error = 'missing_required_artifacts';
+                else evidence_error = 'emit_failed';
+              }
+            }
+
+            schemaGate.setWarnHeader(res, schemaWarnCount);
+            return res.status(409).json({
+              status: 'rejected',
+              error_code: 'unknown_tool',
               ...(evidence_run_id ? { evidence_run_id } : {}),
               ...(evidence_error ? { evidence_error } : {})
             });
