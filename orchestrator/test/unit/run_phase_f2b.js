@@ -33,7 +33,8 @@ async function runTests() {
   console.log(`Test logs: ${testLogsDir}\n`);
 
   const tests = [
-    ...Object.values(require('./phase_f2b_lease_owner_mismatch.test'))
+    ...Object.values(require('./phase_f2b_lease_owner_mismatch.test')),
+    ...Object.values(require('./phase_f2b_readiness_blocked.test'))
   ];
 
   let passed = 0;

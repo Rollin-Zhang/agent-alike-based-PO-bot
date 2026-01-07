@@ -13,6 +13,7 @@ const deriveToolTicketFromTriage = require('./lib/deriveToolTicketFromTriage');
 const { maybeDeriveReplyFromToolOnFill } = require('./lib/maybeDeriveReplyFromToolOnFill');
 const schemaGate = require('./lib/schemaGate');
 const { emitGuardRejectionEvidenceV1 } = require('./lib/evidence/emitGuardRejectionEvidenceV1');
+const { emitReadinessBlockedEvidenceV1 } = require('./lib/evidence/emitReadinessBlockedEvidenceV1');
 
 // --- M2-C.1 Cutover observability ---
 const { createCutoverPolicy } = require('./lib/compat/CutoverPolicy');
@@ -562,6 +563,59 @@ class Orchestrator {
           });
         }
 
+        // --- Optional readiness gating (Phase F2B-1(3)) ---
+        // Default OFF to preserve current behavior. Enable explicitly in tests.
+        const enableFillReadinessGate = process.env.ENABLE_FILL_READINESS_GATE === '1';
+        if (enableFillReadinessGate && ticket?.metadata?.kind === 'TOOL') {
+          const depStates = this.toolGateway.getDepStates();
+          const snapshot = evaluateReadiness(depStates, new Date());
+          const missingRequired = Object.entries(snapshot.required || {})
+            .filter(([_, v]) => !v || v.ready !== true)
+            .map(([k]) => String(k));
+
+          if (missingRequired.length > 0) {
+            let evidence_run_id = null;
+            let evidence_error = null;
+            try {
+              const enableGuardEvidence = process.env.ENABLE_GUARD_REJECTION_EVIDENCE === '1';
+              if (enableGuardEvidence) {
+                const ev = emitReadinessBlockedEvidenceV1({
+                  ticket_id: id,
+                  ticket_kind: ticket?.metadata?.kind || null,
+                  http: {
+                    method: req.method,
+                    path: req.originalUrl || req.path,
+                    status: 409,
+                    request_id: req.headers['x-request-id'] || null
+                  },
+                  depStates
+                });
+                evidence_run_id = ev.evidence_run_id;
+              }
+            } catch (e) {
+              logger.error('emitReadinessBlockedEvidenceV1 failed', e);
+              const debugEvidence = process.env.NODE_ENV === 'test' || process.env.DEBUG_EVIDENCE === '1';
+              if (debugEvidence) {
+                const msg = (e && e.message) ? String(e.message) : '';
+                if (msg.includes('unsupported_stable_code')) evidence_error = 'unsupported_stable_code';
+                else if (msg.includes('LOGS_DIR required')) evidence_error = 'missing_logs_dir';
+                else if (msg.includes('readiness_debug_v1_schema_invalid')) evidence_error = 'readiness_debug_schema_invalid';
+                else if (msg.includes('dep_snapshot_v1_schema_invalid')) evidence_error = 'dep_snapshot_schema_invalid';
+                else if (msg.includes('missing_required_artifacts')) evidence_error = 'missing_required_artifacts';
+                else evidence_error = 'emit_failed';
+              }
+            }
+
+            schemaGate.setWarnHeader(res, schemaWarnCount);
+            return res.status(409).json({
+              status: 'rejected',
+              error_code: 'readiness_blocked',
+              ...(evidence_run_id ? { evidence_run_id } : {}),
+              ...(evidence_error ? { evidence_error } : {})
+            });
+          }
+        }
+
         const expectedLeaseOwner = ticket?.metadata?.lease_owner;
         const expectedLeaseToken = ticket?.metadata?.lease_token;
 
@@ -606,6 +660,7 @@ class Orchestrator {
               if (msg.includes('unsupported_stable_code')) evidence_error = 'unsupported_stable_code';
               else if (msg.includes('LOGS_DIR required')) evidence_error = 'missing_logs_dir';
               else if (msg.includes('lease_debug_v1_schema_invalid')) evidence_error = 'lease_debug_schema_invalid';
+              else if (msg.includes('missing_required_artifacts')) evidence_error = 'missing_required_artifacts';
               else evidence_error = 'emit_failed';
             }
           }

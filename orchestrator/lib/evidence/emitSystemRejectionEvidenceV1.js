@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const Ajv = require('ajv');
+const addFormats = require('ajv-formats');
 
 const { createRunReportV1 } = require('../run_report/createRunReportV1');
 const { createStepReportV1 } = require('../run_report/createStepReportV1');
@@ -74,20 +75,69 @@ function loadJson(absPath) {
   return JSON.parse(fs.readFileSync(absPath, 'utf8'));
 }
 
-function validateLeaseDebugOrThrow(obj) {
-  const schemaAbs = path.resolve(__dirname, '../../schemas/lease_debug.v1.schema.json');
-  const schema = loadJson(schemaAbs);
+function getAjv() {
   const ajv = new Ajv({ allErrors: true, strict: false });
+  addFormats(ajv);
+  return ajv;
+}
+
+function validateAgainstSchemaOrThrow({ obj, schemaAbsPath, label }) {
+  const schema = loadJson(schemaAbsPath);
+  const ajv = getAjv();
   const validate = ajv.compile(schema);
   const ok = validate(obj);
   if (!ok) {
     const errors = (validate.errors || []).map((e) => `${e.instancePath || '/'}:${e.keyword}`).join('|');
-    throw new Error(`lease_debug_v1_schema_invalid:${errors}`);
+    throw new Error(`${label}_schema_invalid:${errors}`);
+  }
+}
+
+function validateKnownKindOrThrow(kind, payload) {
+  const k = String(kind || '');
+  if (!k) return;
+
+  if (k === 'lease_debug_v1') {
+    const schemaAbs = path.resolve(__dirname, '../../schemas/lease_debug.v1.schema.json');
+    return validateAgainstSchemaOrThrow({ obj: payload, schemaAbsPath: schemaAbs, label: 'lease_debug_v1' });
+  }
+
+  if (k === 'readiness_debug_v1') {
+    const schemaAbs = path.resolve(__dirname, '../../schemas/readiness_debug.v1.schema.json');
+    return validateAgainstSchemaOrThrow({ obj: payload, schemaAbsPath: schemaAbs, label: 'readiness_debug_v1' });
+  }
+
+  if (k === 'dep_snapshot_v1') {
+    const schemaAbs = path.resolve(__dirname, '../../schemas/dep_snapshot.v1.schema.json');
+    return validateAgainstSchemaOrThrow({ obj: payload, schemaAbsPath: schemaAbs, label: 'dep_snapshot_v1' });
   }
 }
 
 function sha256Hex(s) {
   return crypto.createHash('sha256').update(String(s), 'utf8').digest('hex');
+}
+
+function assertRequiredArtifactsOrThrow({ runDir, requiredPaths }) {
+  const manifestAbs = path.join(runDir, 'evidence_manifest_v1.json');
+  if (!fs.existsSync(manifestAbs)) {
+    throw new Error('missing_required_artifacts:evidence_manifest_v1.json');
+  }
+
+  const manifest = loadJson(manifestAbs);
+  const listed = new Set((manifest.artifacts || []).map((a) => (a && a.path ? String(a.path) : '')).filter(Boolean));
+
+  const missing = [];
+  for (const rel of requiredPaths) {
+    const p = String(rel || '');
+    if (!p) continue;
+
+    const abs = path.join(runDir, p);
+    if (!fs.existsSync(abs)) missing.push(p);
+    else if (!listed.has(p)) missing.push(`not_listed:${p}`);
+  }
+
+  if (missing.length > 0) {
+    throw new Error(`missing_required_artifacts:${missing.join(',')}`);
+  }
 }
 
 function emitSystemRejectionEvidenceV1(params = {}) {
@@ -98,7 +148,8 @@ function emitSystemRejectionEvidenceV1(params = {}) {
     http = {},
     details_kind,
     details_payload,
-    mode_snapshot
+    mode_snapshot,
+    extra_artifacts
   } = params;
 
   const ticketId = String(ticket_id || '');
@@ -128,13 +179,29 @@ function emitSystemRejectionEvidenceV1(params = {}) {
   const detailsFilename = `${kind}.json`;
   const detailsAbs = path.join(runDir, detailsFilename);
 
-  // Lock known debug payload shapes.
-  if (kind === 'lease_debug_v1') {
-    validateLeaseDebugOrThrow(details_payload);
-  }
+  // Lock known payload shapes.
+  validateKnownKindOrThrow(kind, details_payload);
 
   const detailsJson = JSON.stringify(details_payload, null, 2) + '\n';
   fs.writeFileSync(detailsAbs, detailsJson, 'utf8');
+
+  // Optional extra artifacts: write <kind>.json for each and include in manifest.
+  const extraList = Array.isArray(extra_artifacts) ? extra_artifacts : [];
+  const writtenExtra = [];
+  for (const item of extraList) {
+    const ek = item && typeof item.kind === 'string' ? item.kind : '';
+    const ep = item && item.payload && typeof item.payload === 'object' ? item.payload : null;
+    if (!ek || !ep) {
+      throw new Error('emitSystemRejectionEvidenceV1: extra_artifacts invalid');
+    }
+
+    const filename = item && typeof item.filename === 'string' && item.filename ? item.filename : `${ek}.json`;
+    validateKnownKindOrThrow(ek, ep);
+
+    const abs = path.join(runDir, filename);
+    fs.writeFileSync(abs, JSON.stringify(ep, null, 2) + '\n', 'utf8');
+    writtenExtra.push({ kind: ek, path: filename });
+  }
 
   const step = createStepReportV1({
     step_index: 1,
@@ -177,7 +244,8 @@ function emitSystemRejectionEvidenceV1(params = {}) {
     mode_snapshot_ref: runReportFilename,
     artifacts: [
       { kind: 'run_report_v1', path: runReportFilename, sha256: '0'.repeat(64), bytes: 0 },
-      { kind, path: detailsFilename, sha256: '0'.repeat(64), bytes: 0 }
+      { kind, path: detailsFilename, sha256: '0'.repeat(64), bytes: 0 },
+      ...writtenExtra.map((a) => ({ kind: a.kind, path: a.path, sha256: '0'.repeat(64), bytes: 0 }))
     ],
     checks: [
       {
@@ -188,6 +256,16 @@ function emitSystemRejectionEvidenceV1(params = {}) {
       }
     ]
   });
+
+  // Guardrail: enforce minimal required artifact set is present and listed.
+  const requiredPaths = [
+    runReportFilename,
+    'evidence_manifest_v1.json',
+    'manifest_self_hash_v1.json',
+    detailsFilename,
+    ...writtenExtra.map((a) => a.path)
+  ];
+  assertRequiredArtifactsOrThrow({ runDir, requiredPaths });
 
   return {
     evidence_run_id,

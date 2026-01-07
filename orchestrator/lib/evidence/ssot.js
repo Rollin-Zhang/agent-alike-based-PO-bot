@@ -2,7 +2,8 @@
 
 const EVIDENCE_REASON_RUNTIME = Object.freeze({
   // Runtime stable codes (allow-list). Keep low-cardinality.
-  LEASE_OWNER_MISMATCH: 'lease_owner_mismatch'
+  LEASE_OWNER_MISMATCH: 'lease_owner_mismatch',
+  READINESS_BLOCKED: 'readiness_blocked'
 });
 
 const EVIDENCE_REASON_INTEGRITY = Object.freeze({

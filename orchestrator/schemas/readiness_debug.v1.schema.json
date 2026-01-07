@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "readiness_debug.v1.schema.json",
+  "title": "Readiness Debug v1",
+  "description": "Minimal, schema-locked debug payload for readiness_blocked system rejection evidence.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "ticket_id",
+    "as_of",
+    "degraded",
+    "missing_required_dep_keys",
+    "missing_dep_codes"
+  ],
+  "properties": {
+    "version": { "type": "string", "const": "v1" },
+    "ticket_id": { "type": "string", "minLength": 1 },
+    "as_of": { "type": "string", "format": "date-time" },
+    "degraded": { "type": "boolean" },
+    "missing_required_dep_keys": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "missing_dep_codes": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}
